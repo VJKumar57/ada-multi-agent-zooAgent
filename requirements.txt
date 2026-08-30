@@ -1,0 +1,6 @@
+google-adk
+google-cloud-logging
+langchain-community
+mcp>=1.24,<2
+python-dotenv
+wikipedia

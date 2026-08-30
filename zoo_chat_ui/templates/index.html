@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Zoo Tour Guide</title>
+  <style>
+    :root { --ink: #17211d; --moss: #2f6a48; --leaf: #dcebdc; --sand: #f6f1e6; --coral: #d66b4e; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: var(--sand); color: var(--ink); font-family: Georgia, serif; }
+    main { width: min(760px, calc(100% - 32px)); margin: 0 auto; padding: 48px 0 24px; }
+    header { border-bottom: 3px solid var(--moss); padding-bottom: 20px; }
+    h1 { margin: 0; font-size: 2.4rem; font-weight: 700; letter-spacing: 0; }
+    header p { margin: 8px 0 0; color: #496254; font-family: "Trebuchet MS", sans-serif; }
+    #messages { min-height: 55vh; padding: 24px 0; display: grid; align-content: start; gap: 14px; }
+    .message { max-width: 82%; padding: 14px 16px; border-radius: 7px; white-space: pre-wrap; line-height: 1.45; font-family: "Trebuchet MS", sans-serif; }
+    .guide { background: var(--leaf); border-left: 4px solid var(--moss); }
+    .user { background: var(--coral); color: white; justify-self: end; }
+    form { display: grid; grid-template-columns: 1fr auto; gap: 10px; border-top: 1px solid #cfcbbe; padding-top: 18px; }
+    input { min-width: 0; border: 1px solid #8b998c; border-radius: 5px; padding: 14px; font: 1rem "Trebuchet MS", sans-serif; }
+    button { border: 0; border-radius: 5px; background: var(--moss); color: white; cursor: pointer; padding: 0 18px; font: 700 1rem "Trebuchet MS", sans-serif; }
+    button:disabled { opacity: .6; cursor: wait; }
+    @media (max-width: 560px) { main { padding-top: 28px; } h1 { font-size: 2rem; } form { grid-template-columns: 1fr; } button { min-height: 48px; } .message { max-width: 92%; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header><h1>Zoo Tour Guide</h1><p>Ask about the animals at our zoo and their wild homes.</p></header>
+    <section id="messages" aria-live="polite"><div class="message guide">Hello. Which animal would you like to learn about?</div></section>
+    <form id="chat-form"><input id="message" aria-label="Your question" autocomplete="off" placeholder="Ask about elephants, lions, or red pandas..." required><button id="send" type="submit">Send</button></form>
+  </main>
+  <script>
+    const messages = document.querySelector('#messages');
+    const form = document.querySelector('#chat-form');
+    const input = document.querySelector('#message');
+    const button = document.querySelector('#send');
+    let session;
+    const add = (text, type) => { const item = document.createElement('div'); item.className = `message ${type}`; item.textContent = text; messages.append(item); item.scrollIntoView({ behavior: 'smooth', block: 'end' }); };
+    const createSession = async () => (await fetch('/api/session', { method: 'POST' })).json();
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      const message = input.value.trim();
+      if (!message) return;
+      add(message, 'user'); input.value = ''; input.disabled = button.disabled = true;
+      try {
+        session ??= await createSession();
+        const response = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...session, message }) });
+        const body = await response.text();
+        let data;
+        try { data = JSON.parse(body); }
+        catch { throw new Error('The chat service returned an invalid response. Please try again.'); }
+        if (!response.ok) throw new Error(data.error || 'The guide could not answer right now.');
+        add(data.answer, 'guide');
+      } catch (error) { add(error.message, 'guide'); }
+      finally { input.disabled = button.disabled = false; input.focus(); }
+    });
+  </script>
+</body>
+</html>
