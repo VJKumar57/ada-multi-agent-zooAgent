@@ -1,5 +1,15 @@
 .env
+.env.*
+!.env.example
 .venv/
 __pycache__/
 *.py[cod]
 response.json
+*.pem
+*.key
+*.p12
+*.pfx
+service-account*.json
+service_account*.json
+credentials*.json
+google-credentials*.json
