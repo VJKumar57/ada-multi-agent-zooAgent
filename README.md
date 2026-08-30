@@ -18,6 +18,7 @@ flowchart LR
     UI --> API[ADK Agent API<br/>Cloud Run]
     API --> Greeter[Greeter agent]
     Greeter --> Research[Comprehensive researcher]
+    Greeter --> Tickets[Ticket information agent]
     Research --> MCP[Zoo MCP server<br/>Streamable HTTP]
     Research --> Wiki[Wikipedia]
     Research --> Format[Response formatter]
@@ -39,13 +40,15 @@ ADK Agent API (Cloud Run) ---> Vertex AI Gemini
   |
   v
 Greeter agent ---> Comprehensive researcher ---> Response formatter
-                     |             |
-                     |             +--> Wikipedia
-                     v
-              Zoo MCP server (Streamable HTTP)
-                     |
-                     v
-              Zoo Animal Directory
+      |              |             |
+      |              |             +--> Wikipedia
+      |              v
+      |       Zoo MCP server (Streamable HTTP)
+      |              |
+      |              v
+      |       Zoo Animal Directory
+      v
+Ticket information agent
 ```
 
 ## Agent Workflow
@@ -56,6 +59,7 @@ The root `greeter` agent saves the user's prompt in ADK session state, then tran
 
 1. `comprehensive_researcher`: retrieves animals, ages, and exhibit locations from the Zoo MCP server. For questions asking about habitat, diet, lifespan, or general facts, it also queries Wikipedia. Zoo questions are instructed to call `find_animals` first.
 2. `response_formatter`: converts the collected data into a friendly visitor response, presenting zoo-specific details first.
+3. `ticket_information_agent`: retrieves the current sample Zoo rates for day, night, half-day, half-night, weekly, monthly, yearly, individual, family, resident, and non-resident passes.
 
 ## Models and Tools
 
