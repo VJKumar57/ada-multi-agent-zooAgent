@@ -26,27 +26,27 @@ flowchart LR
     API --> Vertex[Vertex AI Gemini]
 ```
 
-  If Mermaid diagrams are not rendered in your Markdown viewer, the same flow is:
+If Mermaid diagrams are not rendered in your Markdown viewer, the same flow is:
 
-  ```text
-  Browser chat UI
-    |
-    v
-  Zoo Tour Guide UI (Flask, Cloud Run)
-    |
-    v
-  ADK Agent API (Cloud Run) ---> Vertex AI Gemini
-    |
-    v
-  Greeter agent ---> Comprehensive researcher ---> Response formatter
-               |             |
-               |             +--> Wikipedia
-               v
-            Zoo MCP server (Streamable HTTP)
-               |
-               v
-            Zoo Animal Directory
-  ```
+```text
+Browser chat UI
+  |
+  v
+Zoo Tour Guide UI (Flask, Cloud Run)
+  |
+  v
+ADK Agent API (Cloud Run) ---> Vertex AI Gemini
+  |
+  v
+Greeter agent ---> Comprehensive researcher ---> Response formatter
+                     |             |
+                     |             +--> Wikipedia
+                     v
+              Zoo MCP server (Streamable HTTP)
+                     |
+                     v
+              Zoo Animal Directory
+```
 
 ## Agent Workflow
 
