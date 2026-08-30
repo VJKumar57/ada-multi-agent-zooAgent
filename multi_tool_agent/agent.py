@@ -198,7 +198,7 @@ def calculate_meal_order(
 
 def get_id_token() -> str:
     """Get a Cloud Run identity token for the Zoo MCP server."""
-    audience = mcp_server_url.split("/mcp/")[0]
+    audience = mcp_server_url.rstrip("/").removesuffix("/mcp")
     request = google.auth.transport.requests.Request()
     return google.oauth2.id_token.fetch_id_token(request, audience)
 
@@ -219,13 +219,13 @@ comprehensive_researcher = Agent(
     name="comprehensive_researcher",
     model=model_name,
     description="Researches zoo animals using internal data and Wikipedia.",
-    instruction="""You are a helpful research assistant. Fully answer the user's PROMPT.
+    instruction="""You are a helpful research assistant. Fully answer the user's latest message.
 
 You can retrieve data about animals at our zoo, including names, ages, and
 locations, and search Wikipedia for general knowledge, including facts,
 lifespan, diet, and habitat.
 
-Analyze the PROMPT first. Use one tool when one source is enough. When the
+Analyze the user's latest message first. Use one tool when one source is enough. When the
 request needs both internal zoo data and general knowledge, use both tools.
 Synthesize the findings into preliminary research data.
 
@@ -236,8 +236,7 @@ for "elephants". Do not answer until find_animals returns. Do not say that
 zoo-specific information is unavailable unless find_animals returns no matching
 data. If the question asks about general facts, diet, habitat, or lifespan, call
 the wikipedia tool after find_animals and combine both results.
-
-PROMPT: {{ PROMPT }}""",
+""",
     tools=[mcp_tools, wikipedia_tool],
     output_key="RESEARCH_DATA",
 )

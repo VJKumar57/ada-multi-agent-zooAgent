@@ -16,6 +16,12 @@
     .message { max-width: 82%; padding: 14px 16px; border-radius: 7px; white-space: pre-wrap; line-height: 1.45; font-family: "Trebuchet MS", sans-serif; }
     .guide { background: var(--leaf); border-left: 4px solid var(--moss); }
     .user { background: var(--coral); color: white; justify-self: end; }
+    #auth { margin: 24px 0; padding: 18px; border: 1px solid #8b998c; border-radius: 6px; font-family: "Trebuchet MS", sans-serif; }
+    #auth h2 { margin: 0 0 12px; font-size: 1.1rem; }
+    .auth-fields { display: grid; grid-template-columns: 1fr 1fr auto auto; gap: 8px; }
+    .auth-button { min-height: 42px; padding: 0 12px; }
+    #auth-status { margin: 12px 0 0; color: #496254; }
+    #sign-out { display: none; margin-left: 8px; }
     form { display: grid; grid-template-columns: 1fr auto; gap: 10px; border-top: 1px solid #cfcbbe; padding-top: 18px; }
     input { min-width: 0; border: 1px solid #8b998c; border-radius: 5px; padding: 14px; font: 1rem "Trebuchet MS", sans-serif; }
     button { border: 0; border-radius: 5px; background: var(--moss); color: white; cursor: pointer; padding: 0 18px; font: 700 1rem "Trebuchet MS", sans-serif; }
@@ -26,25 +32,88 @@
 <body>
   <main>
     <header><h1>Zoo Tour Guide</h1><p>Ask about animals, tickets, passes, and Zoo Cafe meals.</p></header>
+    {% if firebase_enabled %}
+    <section id="auth" aria-label="Sign in">
+      <h2>Sign in to continue</h2>
+      <div class="auth-fields">
+        <input id="email" type="email" autocomplete="email" placeholder="Email address" aria-label="Email address">
+        <input id="password" type="password" autocomplete="current-password" placeholder="Password" aria-label="Password">
+        <button class="auth-button" id="email-sign-in" type="button">Sign in</button>
+        <button class="auth-button" id="register" type="button">Register</button>
+      </div>
+      <button class="auth-button" id="google-sign-in" type="button">Continue with Google</button>
+      <button class="auth-button" id="guest-sign-in" type="button">Continue as guest</button>
+      <button class="auth-button" id="sign-out" type="button">Sign out</button>
+      <p id="auth-status" role="status">Choose Google sign-in or use an email and password.</p>
+    </section>
+    {% else %}
+    <section id="auth"><p>Authentication has not been configured for this deployment.</p></section>
+    {% endif %}
     <section id="messages" aria-live="polite"><div class="message guide">Hello. Which animal, Zoo pass, or meal would you like to learn about?</div></section>
-    <form id="chat-form"><input id="message" aria-label="Your question" autocomplete="off" placeholder="Ask about elephants, a family pass, or a 1,000-calorie meal..." required><button id="send" type="submit">Send</button></form>
+    <form id="chat-form"><input id="message" aria-label="Your question" autocomplete="off" placeholder="Ask about elephants, a family pass, or a 1,000-calorie meal..." maxlength="1000" required disabled><button id="send" type="submit" disabled>Send</button></form>
   </main>
+  {% if firebase_enabled %}
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  {% endif %}
   <script>
     const messages = document.querySelector('#messages');
     const form = document.querySelector('#chat-form');
     const input = document.querySelector('#message');
     const button = document.querySelector('#send');
     let session;
+    let currentUser;
     const add = (text, type) => { const item = document.createElement('div'); item.className = `message ${type}`; item.textContent = text; messages.append(item); item.scrollIntoView({ behavior: 'smooth', block: 'end' }); };
-    const createSession = async () => (await fetch('/api/session', { method: 'POST' })).json();
+    const authenticatedFetch = async (url, options = {}) => {
+      const token = await currentUser.getIdToken();
+      const headers = new Headers(options.headers);
+      headers.set('Authorization', `Bearer ${token}`);
+      return fetch(url, { ...options, headers });
+    };
+    const createSession = async () => {
+      const response = await authenticatedFetch('/api/session', { method: 'POST' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Could not create a session.');
+      return data;
+    };
+    {% if firebase_enabled %}
+    const auth = firebase.initializeApp({{ firebase_config | tojson }}).auth();
+    const status = document.querySelector('#auth-status');
+    const signOut = document.querySelector('#sign-out');
+    const setAuthenticatedState = user => {
+      currentUser = user;
+      session = undefined;
+      input.disabled = button.disabled = !user;
+      signOut.style.display = user ? 'inline-block' : 'none';
+      status.textContent = user ? `Signed in as ${user.email}.` : 'Choose Google sign-in or use an email and password.';
+    };
+    auth.onAuthStateChanged(setAuthenticatedState);
+    document.querySelector('#google-sign-in').addEventListener('click', async () => {
+      try { await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()); }
+      catch (error) { status.textContent = error.message; }
+    });
+    document.querySelector('#email-sign-in').addEventListener('click', async () => {
+      try { await auth.signInWithEmailAndPassword(document.querySelector('#email').value, document.querySelector('#password').value); }
+      catch (error) { status.textContent = error.message; }
+    });
+    document.querySelector('#register').addEventListener('click', async () => {
+      try { await auth.createUserWithEmailAndPassword(document.querySelector('#email').value, document.querySelector('#password').value); }
+      catch (error) { status.textContent = error.message; }
+    });
+    document.querySelector('#guest-sign-in').addEventListener('click', async () => {
+      try { await auth.signInAnonymously(); }
+      catch (error) { status.textContent = error.message; }
+    });
+    signOut.addEventListener('click', () => auth.signOut());
+    {% endif %}
     form.addEventListener('submit', async event => {
       event.preventDefault();
       const message = input.value.trim();
-      if (!message) return;
+      if (!currentUser || !message) return;
       add(message, 'user'); input.value = ''; input.disabled = button.disabled = true;
       try {
         session ??= await createSession();
-        const response = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...session, message }) });
+        const response = await authenticatedFetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: session.sessionId, message }) });
         const body = await response.text();
         let data;
         try { data = JSON.parse(body); }
