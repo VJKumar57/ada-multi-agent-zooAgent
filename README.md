@@ -149,9 +149,34 @@ MCP_SERVER_URL=https://zoo-mcp-server-PROJECT_NUMBER.us-west1.run.app/mcp
 MCP_SERVER_AUTHENTICATED=FALSE
 ```
 
-`MCP_SERVER_AUTHENTICATED=FALSE` is correct for a public Zoo MCP server. For a protected Cloud Run MCP service, set it to `TRUE`; the agent obtains and sends a Google identity token.
+Use `MCP_SERVER_AUTHENTICATED=TRUE` for a protected Cloud Run MCP service; the agent obtains and sends a Google identity token. The browser UI also obtains an identity token before calling the private ADK agent API.
 
 Cloud Run does not upload nested `.env` files by default. Pass these values with `--set-env-vars` during deployment.
+
+### Firebase Authentication and Personas
+
+The browser UI supports Firebase Authentication with both Google sign-in and email/password registration. Configure Firebase Authentication in the Firebase console for the Google Cloud project:
+
+1. Add a Firebase web app and copy its Web SDK configuration values.
+2. In **Authentication > Sign-in method**, enable **Google**, **Email/Password**, and **Anonymous** providers. Anonymous Authentication supports the browser's **Continue as guest** option without collecting an email address.
+3. In **Authentication > Settings > Authorized domains**, add the deployed Zoo Tour Guide UI domain.
+4. Set the UI environment variables shown in `zoo_chat_ui/.env.example`. The Firebase Web API key is intentionally delivered to browsers as part of Firebase's client SDK configuration; restrict it in Google Cloud to the Firebase Authentication API and the authorized web domains. Do not use it for privileged server-to-server access.
+
+The UI verifies every Firebase ID token on the server. New users and anonymous sessions receive the `guest` role unless they have a custom claim. The email listed in `ADMIN_EMAILS` is an admin bootstrap account. An authenticated admin can assign `admin`, `employee`, `member`, or `guest` as a Firebase custom claim using `POST /api/admin/users/{FIREBASE_UID}/role` with `{ "role": "member" }`. A user must sign out and sign in again after their role changes.
+
+Firebase Authentication is used because Cloud Run IAM protects Google Cloud resources and workload identities, rather than application users. Firebase provides browser-friendly Google sign-in, email/password accounts, anonymous guest sessions, and Firebase ID tokens that the UI can verify. Do not use Cloud Run IAM roles as visitor personas: that would require adding each visitor to the Google Cloud project and would not support email/password or anonymous access.
+
+Authentication is layered as follows:
+
+```text
+Browser user
+  -> Firebase Authentication: who is this user and what app role do they have?
+  -> Public Flask UI: verifies Firebase token and enforces persona access
+  -> Cloud Run IAM: UI service account invokes private ADK API
+  -> Cloud Run IAM: agent service account invokes private MCP server
+```
+
+The personas are `guest`, `member`, `employee`, and `admin`. Firebase controls the browser user's identity and application role; Cloud Run IAM controls access between deployed services.
 
 ## Deploy
 
@@ -172,7 +197,9 @@ gcloud run deploy zoo-mcp-server \
   --source zoo_mcp_server \
   --project "$PROJECT_ID" \
   --region "$MCP_REGION" \
-  --allow-unauthenticated
+  --max-instances 2 \
+  --concurrency 10 \
+  --timeout 120
 ```
 
 ### 2. Deploy the ADK Agent API
@@ -182,8 +209,10 @@ gcloud run deploy weather-agent \
   --source . \
   --project "$PROJECT_ID" \
   --region "$AGENT_REGION" \
-  --allow-unauthenticated \
-  --set-env-vars "GOOGLE_GENAI_USE_VERTEXAI=TRUE,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=${AGENT_REGION},MODEL=gemini-2.5-flash,MCP_SERVER_URL=${MCP_URL},MCP_SERVER_AUTHENTICATED=FALSE"
+  --max-instances 2 \
+  --concurrency 10 \
+  --timeout 120 \
+  --set-env-vars "GOOGLE_GENAI_USE_VERTEXAI=TRUE,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=${AGENT_REGION},MODEL=gemini-2.5-flash,MCP_SERVER_URL=${MCP_URL},MCP_SERVER_AUTHENTICATED=TRUE"
 ```
 
 Capture its URL:
@@ -199,8 +228,11 @@ gcloud run deploy zoo-tour-guide-ui \
   --source zoo_chat_ui \
   --project "$PROJECT_ID" \
   --region "$AGENT_REGION" \
+  --max-instances 2 \
+  --concurrency 10 \
+  --timeout 120 \
   --allow-unauthenticated \
-  --set-env-vars "AGENT_URL=${AGENT_URL}"
+  --set-env-vars "AGENT_URL=${AGENT_URL},FIREBASE_AUTH_ENABLED=TRUE,FIREBASE_API_KEY=YOUR_FIREBASE_WEB_API_KEY,FIREBASE_AUTH_DOMAIN=YOUR_PROJECT.firebaseapp.com,FIREBASE_PROJECT_ID=${PROJECT_ID},FIREBASE_APP_ID=YOUR_FIREBASE_WEB_APP_ID,ADMIN_EMAILS=YOUR_ADMIN_EMAIL"
 ```
 
 Open the displayed UI URL in a browser.
@@ -281,4 +313,8 @@ curl -sS -X POST "$MCP_URL" \
 
 ## Security Notes
 
-The current services allow unauthenticated access for demonstration purposes. Before production use, restrict Cloud Run invoker access and place an authentication layer in front of the UI and agent API. Do not commit credentials or real secrets to `.env` files.
+The ADK agent API and Zoo MCP service require Cloud Run IAM authentication. The UI runtime service account needs `roles/run.invoker` on the agent API, and the agent runtime service account needs `roles/run.invoker` on the MCP service. The browser UI is public only so Firebase can present the sign-in experience; Flask rejects unauthenticated API requests after Firebase token verification.
+
+For a publicly shared deployment, use Identity-Aware Proxy or an application authentication layer, persistent distributed rate limiting, and a dedicated service account for each service. The included UI applies a per-instance request limit, a 4 KB request-body limit, a 1,000-character message limit, and upstream timeouts; it is a baseline, not a substitute for edge rate limiting.
+
+Set a billing budget and alerts before sharing a public endpoint. Cap Cloud Run instances and concurrency, configure applicable Vertex AI quotas in the Google Cloud console, and create Cloud Monitoring alerts for Cloud Run error rate and Vertex AI usage. Do not commit credentials or real secrets to `.env` files.
