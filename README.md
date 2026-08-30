@@ -6,9 +6,9 @@ A multi-agent Zoo Tour Guide deployed on Google Cloud Run. It answers questions 
 
 | Service | Region | URL | Purpose |
 | --- | --- | --- | --- |
-| Zoo Tour Guide UI | `us-central1` | `https://zoo-tour-guide-ui-377188174683.us-central1.run.app` | Browser chat interface |
-| ADK agent API | `us-central1` | `https://weather-agent-377188174683.us-central1.run.app` | Agent runtime and REST API |
-| Zoo MCP server | `us-west1` | `https://zoo-mcp-server-377188174683.us-west1.run.app/mcp` | Internal zoo data tools |
+| Zoo Tour Guide UI | Configured deployment region | Obtain with `gcloud run services describe` | Browser chat interface |
+| ADK agent API | Configured deployment region | Obtain with `gcloud run services describe` | Agent runtime and REST API |
+| Zoo MCP server | Configured deployment region | Obtain with `gcloud run services describe` | Internal zoo data tools |
 
 ## Architecture
 
@@ -19,6 +19,7 @@ flowchart LR
     API --> Greeter[Greeter agent]
     Greeter --> Research[Comprehensive researcher]
     Greeter --> Tickets[Ticket information agent]
+    Greeter --> Meals[Meal planner agent]
     Research --> MCP[Zoo MCP server<br/>Streamable HTTP]
     Research --> Wiki[Wikipedia]
     Research --> Format[Response formatter]
@@ -49,17 +50,26 @@ Greeter agent ---> Comprehensive researcher ---> Response formatter
       |       Zoo Animal Directory
       v
 Ticket information agent
+      |
+      v
+    Meal planner agent
 ```
 
 ## Agent Workflow
 
-The root `greeter` agent saves the user's prompt in ADK session state, then transfers control to `tour_guide_workflow`.
+The root `greeter` agent routes animal research, Zoo admission, and Zoo Cafe meal requests to the appropriate specialist.
 
 `tour_guide_workflow` is a `SequentialAgent` containing:
 
 1. `comprehensive_researcher`: retrieves animals, ages, and exhibit locations from the Zoo MCP server. For questions asking about habitat, diet, lifespan, or general facts, it also queries Wikipedia. Zoo questions are instructed to call `find_animals` first.
 2. `response_formatter`: converts the collected data into a friendly visitor response, presenting zoo-specific details first.
-3. `ticket_information_agent`: retrieves the current sample Zoo rates for day, night, half-day, half-night, weekly, monthly, yearly, individual, family, resident, and non-resident passes.
+
+Sibling specialists of `tour_guide_workflow` are:
+
+1. `ticket_information_agent`: retrieves the current sample Zoo rates for day, night, half-day, half-night, weekly, monthly, yearly, individual, family, resident, and non-resident passes.
+2. `meal_planner_agent`: recommends dietary-aware Zoo Cafe selections, calculates order prices and calories, and applies the $20 food credit included with an eligible full-day pass.
+
+Zoo Cafe prices, calorie counts, and food-credit rules are sample data for this demonstration. Replace them with an approved cafe catalog before production use.
 
 ## Models and Tools
 
@@ -206,6 +216,20 @@ Tell me about the elephants at our zoo and their natural habitat.
 ```
 
 The answer should identify Asha and Milo with their age and exhibit location, then provide habitat information.
+
+Ask about ticket options:
+
+```text
+What are the options and eligibility rules for a resident family yearly pass?
+```
+
+Ask for a calorie-aware Zoo Cafe meal plan:
+
+```text
+Plan a vegetarian meal below 1000 calories: a garden salad, paneer tikka, fruit bowl, and diet soda. I have a full day pass with food included.
+```
+
+The Meal Planner should calculate the calorie total and order subtotal, then apply the $20 full-day-pass food credit when eligible.
 
 ### Agent REST API
 
