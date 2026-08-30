@@ -109,6 +109,93 @@ def get_ticket_details(pass_type: str = "all") -> dict:
     }
 
 
+MEAL_MENU = {
+    "fruit_bowl": {"name": "Seasonal Fruit Bowl", "price": 7, "calories": 180, "diet": "vegan, gluten-free"},
+    "garden_salad": {"name": "Garden Salad", "price": 9, "calories": 240, "diet": "vegan, gluten-free, low-carb"},
+    "grilled_chicken_salad": {"name": "Grilled Chicken Salad", "price": 13, "calories": 390, "diet": "non-vegetarian, low-carb"},
+    "veggie_burger": {"name": "Veggie Burger", "price": 12, "calories": 480, "diet": "vegetarian"},
+    "grilled_chicken_burger": {"name": "Grilled Chicken Burger", "price": 14, "calories": 540, "diet": "non-vegetarian"},
+    "vegetable_pizza": {"name": "Vegetable Pizza", "price": 15, "calories": 620, "diet": "vegetarian"},
+    "chicken_pizza": {"name": "Chicken Pizza", "price": 17, "calories": 720, "diet": "non-vegetarian"},
+    "paneer_tikka": {"name": "Paneer Tikka", "price": 11, "calories": 360, "diet": "vegetarian, gluten-free, low-carb"},
+    "chicken_tikka": {"name": "Chicken Tikka", "price": 13, "calories": 410, "diet": "non-vegetarian, gluten-free, low-carb"},
+    "bhel_puri": {"name": "Bhel Puri", "price": 7, "calories": 310, "diet": "vegetarian"},
+    "pani_puri": {"name": "Pani Puri", "price": 7, "calories": 280, "diet": "vegetarian"},
+    "ice_cream": {"name": "Ice Cream", "price": 6, "calories": 260, "diet": "vegetarian"},
+    "gulab_jamun": {"name": "Gulab Jamun", "price": 6, "calories": 300, "diet": "vegetarian"},
+    "brownie": {"name": "Chocolate Brownie", "price": 6, "calories": 340, "diet": "vegetarian"},
+    "water": {"name": "Bottled Water", "price": 3, "calories": 0, "diet": "vegan, gluten-free, low-carb"},
+    "fresh_lime_soda": {"name": "Fresh Lime Soda", "price": 5, "calories": 130, "diet": "vegan, gluten-free"},
+    "diet_soda": {"name": "Diet Soda", "price": 4, "calories": 0, "diet": "vegan, gluten-free, low-carb"},
+}
+
+
+def get_meal_options(dietary_preference: str = "all") -> dict:
+    """Return Zoo Cafe menu items filtered by dietary preference when requested."""
+    preference = dietary_preference.lower().replace("_", "-")
+    if preference in {"all", "menu", "food"}:
+        matching_items = MEAL_MENU
+    else:
+        matching_items = {
+            item_id: item
+            for item_id, item in MEAL_MENU.items()
+            if preference in item["diet"]
+            or (preference == "vegetarian" and "vegan" in item["diet"])
+        }
+    return {
+        "status": "success",
+        "items": matching_items,
+        "notes": [
+            "Menu prices and calorie counts are sample values; confirm current availability with Zoo Cafe staff.",
+            "A full-day pass with food included provides a $20 Zoo Cafe credit per pass holder.",
+            "Unused food credit has no cash value and does not carry over.",
+            "Any amount above the available credit is billed separately.",
+            "Tell staff about allergies; the kitchen cannot guarantee an allergen-free environment.",
+        ],
+    }
+
+
+def calculate_meal_order(
+    item_ids: list[str],
+    full_day_pass_with_food: bool = False,
+) -> dict:
+    """Calculate Zoo Cafe order calories, price, and any eligible day-pass food credit."""
+    selected_items = []
+    unavailable_items = []
+    for item_id in item_ids:
+        normalized_item_id = item_id.lower().replace("-", "_").replace(" ", "_")
+        menu_item = MEAL_MENU.get(normalized_item_id)
+        if menu_item is None:
+            menu_item = next(
+                (
+                    item
+                    for item in MEAL_MENU.values()
+                    if item["name"].lower() == item_id.lower()
+                ),
+                None,
+            )
+        if menu_item:
+            selected_items.append(menu_item)
+        else:
+            unavailable_items.append(item_id)
+
+    subtotal = sum(item["price"] for item in selected_items)
+    calories = sum(item["calories"] for item in selected_items)
+    food_credit = min(subtotal, 20) if full_day_pass_with_food else 0
+    return {
+        "status": "success",
+        "selected_items": selected_items,
+        "unavailable_items": unavailable_items,
+        "subtotal": f"${subtotal}",
+        "total_calories": calories,
+        "food_credit": f"${food_credit}",
+        "amount_due": f"${subtotal - food_credit}",
+        "message": "The $20 full-day-pass food credit was applied. The remaining balance is billed separately."
+        if full_day_pass_with_food
+        else "No food credit was applied.",
+    }
+
+
 def get_id_token() -> str:
     """Get a Cloud Run identity token for the Zoo MCP server."""
     audience = mcp_server_url.split("/mcp/")[0]
@@ -186,16 +273,38 @@ pricing and advise visitors to confirm special-event availability before booking
     tools=[get_ticket_details],
 )
 
+meal_planner_agent = Agent(
+    name="meal_planner_agent",
+    model=model_name,
+    description="Plans Zoo Cafe meals, dietary options, calories, and food-credit totals.",
+    instruction="""You are the Zoo Cafe Meal Planner. Help visitors select vegetarian,
+non-vegetarian, low-carb, diet, calorie-balanced, fruit, salad, burger, pizza,
+dessert, ice cream, sweet, cool drink, chaat, and Indian chaat options. Always
+call get_meal_options before recommending menu items. When a visitor selects
+items or asks for a total, call calculate_meal_order. For a calorie target,
+recommend available selections that stay at or below the target, and calculate
+them before responding. Ask whether the visitor has a full-day pass with food
+included if they have not said so. Such a pass has a $20 Zoo Cafe credit per
+pass holder; apply it only after the visitor confirms it. Clearly state any
+amount due, that food credit is not cash or transferable, and that allergies
+must be discussed with cafe staff. Explain that menu prices and calorie counts
+are sample values and must be confirmed with Zoo Cafe staff.""",
+    tools=[get_meal_options, calculate_meal_order],
+)
+
 
 root_agent = Agent(
     name="greeter",
     model=model_name,
     description="The entry point for the Zoo Tour Guide.",
     instruction="""You are the Zoo Tour Guide entry point. Help visitors learn about
-animals and Zoo admission. For questions about tickets, passes, prices, resident
-rates, family rates, or visiting hours, transfer control to ticket_information_agent.
+animals, Zoo admission, and Zoo Cafe meals. For questions about food, meals,
+orders, vegetarian or non-vegetarian options, dietary needs, calories, cafe
+items, or food credit, transfer control to meal_planner_agent. For questions
+about tickets, passes, prices, resident rates, family rates, or visiting hours,
+transfer control to ticket_information_agent.
 For animal questions, use add_prompt_to_state to save the user's response, then
 transfer control to tour_guide_workflow.""",
     tools=[add_prompt_to_state],
-    sub_agents=[tour_guide_workflow, ticket_information_agent],
+    sub_agents=[tour_guide_workflow, ticket_information_agent, meal_planner_agent],
 )

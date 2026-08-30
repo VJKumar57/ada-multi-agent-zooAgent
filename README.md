@@ -53,13 +53,19 @@ Ticket information agent
 
 ## Agent Workflow
 
-The root `greeter` agent saves the user's prompt in ADK session state, then transfers control to `tour_guide_workflow`.
+The root `greeter` agent routes animal research, Zoo admission, and Zoo Cafe meal requests to the appropriate specialist.
 
 `tour_guide_workflow` is a `SequentialAgent` containing:
 
 1. `comprehensive_researcher`: retrieves animals, ages, and exhibit locations from the Zoo MCP server. For questions asking about habitat, diet, lifespan, or general facts, it also queries Wikipedia. Zoo questions are instructed to call `find_animals` first.
 2. `response_formatter`: converts the collected data into a friendly visitor response, presenting zoo-specific details first.
-3. `ticket_information_agent`: retrieves the current sample Zoo rates for day, night, half-day, half-night, weekly, monthly, yearly, individual, family, resident, and non-resident passes.
+
+Sibling specialists of `tour_guide_workflow` are:
+
+1. `ticket_information_agent`: retrieves the current sample Zoo rates for day, night, half-day, half-night, weekly, monthly, yearly, individual, family, resident, and non-resident passes.
+2. `meal_planner_agent`: recommends dietary-aware Zoo Cafe selections, calculates order prices and calories, and applies the $20 food credit included with an eligible full-day pass.
+
+Zoo Cafe prices, calorie counts, and food-credit rules are sample data for this demonstration. Replace them with an approved cafe catalog before production use.
 
 ## Models and Tools
 
