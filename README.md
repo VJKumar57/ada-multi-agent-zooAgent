@@ -178,6 +178,8 @@ Browser user
 
 The personas are `guest`, `member`, `employee`, and `admin`. Firebase controls the browser user's identity and application role; Cloud Run IAM controls access between deployed services.
 
+Role pricing is enforced by the server-created ADK session, not by a browser-supplied value. Guests and admins receive standard sample pricing. Employees receive a flat 10% discount, and members receive a flat 5% discount, on Zoo admission tickets/passes and Zoo Cafe orders. For Cafe orders, the role discount is applied before any eligible $20 full-day-pass food credit.
+
 ## Deploy
 
 Set shell variables before deploying:
@@ -262,6 +264,8 @@ Plan a vegetarian meal below 1000 calories: a garden salad, paneer tikka, fruit 
 ```
 
 The Meal Planner should calculate the calorie total and order subtotal, then apply the $20 full-day-pass food credit when eligible.
+
+To validate role pricing, assign an account the `employee` or `member` custom claim, sign out and back in to refresh its Firebase ID token, then ask for ticket pricing or a Cafe order total. The response should identify the 10% employee or 5% member discount.
 
 ### Agent REST API
 
