@@ -86,23 +86,65 @@ TICKET_OPTIONS = {
 }
 
 
-def get_ticket_details(pass_type: str = "all") -> dict:
+ROLE_DISCOUNTS = {
+    "employee": 0.10,
+    "member": 0.05,
+}
+
+
+def get_role_discount(tool_context: ToolContext) -> tuple[str, float]:
+    """Return the server-provided role and its eligible discount rate."""
+    role = tool_context.state.get("USER_ROLE", "guest")
+    return role, ROLE_DISCOUNTS.get(role, 0.0)
+
+
+def discount_ticket_prices(value: object, discount_rate: float) -> object:
+    """Apply a percentage discount to the nested ticket price catalog."""
+    if isinstance(value, dict):
+        return {
+            key: discount_ticket_prices(item, discount_rate)
+            for key, item in value.items()
+        }
+    if isinstance(value, str) and value.startswith("$"):
+        return f"${float(value[1:]) * (1 - discount_rate):.2f}"
+    return value
+
+
+def get_ticket_details(
+    tool_context: ToolContext,
+    pass_type: str = "all",
+) -> dict:
     """Return ticket prices, eligibility, and visiting hours for Zoo passes."""
     normalized_pass_type = pass_type.lower().replace("-", "_").replace(" ", "_")
+    role, discount_rate = get_role_discount(tool_context)
+    discount_note = (
+        f"Your {role} discount of {discount_rate:.0%} is included in the displayed prices."
+        if discount_rate
+        else "No role-based discount applies to guest pricing."
+    )
     if normalized_pass_type in {"all", "passes", "tickets", "ticket"}:
         return {
             "status": "success",
-            "details": TICKET_OPTIONS,
+            "details": discount_ticket_prices(TICKET_OPTIONS, discount_rate),
+            "discount": {"role": role, "rate": discount_rate},
             "notes": [
                 "Child pricing applies to guests ages 3 to 12; children under 3 enter free.",
                 "Senior pricing applies to guests age 65 and older.",
                 "Family passes cover two adults and up to three children living at the same address.",
                 "Resident pricing requires a valid local address at entry.",
                 "Passes exclude separately ticketed special events and parking.",
+                discount_note,
             ],
         }
     if normalized_pass_type in TICKET_OPTIONS:
-        return {"status": "success", "details": TICKET_OPTIONS[normalized_pass_type]}
+        return {
+            "status": "success",
+            "details": discount_ticket_prices(
+                TICKET_OPTIONS[normalized_pass_type], discount_rate
+            ),
+            "discount": {"role": role, "rate": discount_rate},
+            "notes": [discount_note],
+        }
     return {
         "status": "error",
         "error_message": f"Ticket type '{pass_type}' is not available.",
@@ -156,6 +198,7 @@ def get_meal_options(dietary_preference: str = "all") -> dict:
 
 
 def calculate_meal_order(
+    tool_context: ToolContext,
     item_ids: list[str],
     full_day_pass_with_food: bool = False,
 ) -> dict:
@@ -180,19 +223,26 @@ def calculate_meal_order(
             unavailable_items.append(item_id)
 
     subtotal = sum(item["price"] for item in selected_items)
+    role, discount_rate = get_role_discount(tool_context)
+    role_discount = round(subtotal * discount_rate, 2)
+    discounted_subtotal = subtotal - role_discount
     calories = sum(item["calories"] for item in selected_items)
-    food_credit = min(subtotal, 20) if full_day_pass_with_food else 0
+    food_credit = min(discounted_subtotal, 20) if full_day_pass_with_food else 0
     return {
         "status": "success",
         "selected_items": selected_items,
         "unavailable_items": unavailable_items,
-        "subtotal": f"${subtotal}",
+        "subtotal": f"${subtotal:.2f}",
+        "role": role,
+        "role_discount": f"${role_discount:.2f}",
+        "discounted_subtotal": f"${discounted_subtotal:.2f}",
         "total_calories": calories,
-        "food_credit": f"${food_credit}",
-        "amount_due": f"${subtotal - food_credit}",
-        "message": "The $20 full-day-pass food credit was applied. The remaining balance is billed separately."
+        "food_credit": f"${food_credit:.2f}",
+        "amount_due": f"${discounted_subtotal - food_credit:.2f}",
+        "message": f"The {role} discount of {discount_rate:.0%} was applied before the food credit. "
+        "The $20 full-day-pass food credit was applied. The remaining balance is billed separately."
         if full_day_pass_with_food
-        else "No food credit was applied.",
+        else f"The {role} discount of {discount_rate:.0%} was applied. No food credit was applied.",
     }
 
 
@@ -267,8 +317,10 @@ ticket_information_agent = Agent(
 get_ticket_details before answering questions about tickets, prices, admission,
 passes, resident rates, family rates, or visiting hours. Give the relevant pass
 price, distinguish resident and non-resident eligibility, and mention applicable
-age or family requirements. Treat all quoted prices as the Zoo's current sample
-pricing and advise visitors to confirm special-event availability before booking.""",
+age or family requirements. The tool applies the signed-in employee or member
+discount from the server-created session; state the applied discount when one is
+returned. Treat all quoted prices as the Zoo's current sample pricing and advise
+visitors to confirm special-event availability before booking.""",
     tools=[get_ticket_details],
 )
 
@@ -286,7 +338,8 @@ them before responding. Ask whether the visitor has a full-day pass with food
 included if they have not said so. Such a pass has a $20 Zoo Cafe credit per
 pass holder; apply it only after the visitor confirms it. Clearly state any
 amount due, that food credit is not cash or transferable, and that allergies
-must be discussed with cafe staff. Explain that menu prices and calorie counts
+must be discussed with cafe staff. State the server-calculated employee or member
+discount when it applies, then explain that menu prices and calorie counts
 are sample values and must be confirmed with Zoo Cafe staff.""",
     tools=[get_meal_options, calculate_meal_order],
 )
