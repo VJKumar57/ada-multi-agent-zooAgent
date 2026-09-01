@@ -379,21 +379,50 @@ def coordinate_origin(latitude: float, longitude: float) -> dict[str, float | st
     }
 
 
+def nearest_zoo_route(
+    origin: dict[str, float | str],
+) -> tuple[dict[str, Any], dict[str, float]]:
+    """Calculate routes to configured Zoos and select the shortest route."""
+    routes = [(zoo, calculate_route(origin, zoo)) for zoo in ZOO_LOCATIONS.values()]
+    return min(
+        routes,
+        key=lambda item: (
+            item[1]["distance_km"],
+            item[1]["estimated_duration_minutes"],
+            item[0]["id"],
+        ),
+    )
+
+
 @travel_mcp.tool()
 def find_nearest_zoo(origin_latitude: float, origin_longitude: float) -> dict[str, Any]:
     """Find the nearest Zoo by traffic-free driving route from shared coordinates."""
     try:
         origin = coordinate_origin(origin_latitude, origin_longitude)
-        routes = [
-            (zoo, calculate_route(origin, zoo)) for zoo in ZOO_LOCATIONS.values()
-        ]
+        zoo, route = nearest_zoo_route(origin)
     except (RuntimeError, ValueError) as error:
         return error_response(str(error))
-    zoo, route = min(routes, key=lambda item: item[1]["distance_km"])
     return {
         "status": "success",
         "zoo": zoo,
         "source": "OpenStreetMap OSRM",
+        "traffic_included": False,
+        **route,
+    }
+
+
+@travel_mcp.tool()
+def find_nearest_zoo_from_origin(origin: str) -> dict[str, Any]:
+    """Find the nearest Zoo by traffic-free driving route from a typed origin."""
+    try:
+        origin_location = geocode_address(origin)
+        zoo, route = nearest_zoo_route(origin_location)
+    except (RuntimeError, ValueError) as error:
+        return error_response(str(error))
+    return {
+        "status": "success",
+        "zoo": zoo,
+        "source": "OpenStreetMap Nominatim and OSRM",
         "traffic_included": False,
         **route,
     }
