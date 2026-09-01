@@ -126,6 +126,20 @@ def create_session():
     return jsonify({"userId": user_id, "sessionId": session_id})
 
 
+def execution_trace(events: list[dict]) -> list[dict[str, str]]:
+    """Extract agent transfers and tool calls without exposing tool arguments or results."""
+    steps = []
+    for event in events:
+        transferred_agent = event.get("actions", {}).get("transferToAgent")
+        if transferred_agent:
+            steps.append({"type": "agent", "name": transferred_agent})
+        for part in event.get("content", {}).get("parts", []):
+            function_call = part.get("functionCall")
+            if function_call and function_call.get("name") != "transfer_to_agent":
+                steps.append({"type": "tool", "name": function_call["name"]})
+    return steps
+
+
 @app.post("/api/chat")
 @authenticated_user
 def chat():
@@ -166,7 +180,7 @@ def chat():
         ),
         "I could not produce a response.",
     )
-    return jsonify({"answer": final_text})
+    return jsonify({"answer": final_text, "execution": execution_trace(events)})
 
 
 @app.post("/api/admin/users/<user_id>/role")

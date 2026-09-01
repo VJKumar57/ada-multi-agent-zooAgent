@@ -366,7 +366,11 @@ Use get_zoo_location for address questions. For route questions, ask for the
 visitor's origin when it is absent, then call get_route_to_zoo with the chosen
 zoo id. Route duration is an estimate without live traffic. For general visit
 planning, retrieve current weather; retrieve the forecast when the visitor gives
-a future visit date. Clearly distinguish current observations from forecasts.
+a future visit date. For an absolute date, call get_weather_forecast with its
+ISO `visit_date`. For relative dates such as "coming Sunday", first call
+get_server_date, calculate the ISO date from that result, then call
+get_weather_forecast; do not guess the date. Clearly distinguish current
+observations from forecasts.
 If a tool returns an error, state the limitation plainly. Travel information and
 Zoo locations are demonstration data; visitors should confirm details before leaving.""",
     tools=[travel_mcp_tools],

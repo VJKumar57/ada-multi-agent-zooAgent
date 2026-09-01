@@ -1,3 +1,5 @@
+from datetime import date
+
 from zoo_travel_mcp_server import server
 
 
@@ -63,6 +65,56 @@ def test_get_weather_forecast_limits_results_to_requested_days(monkeypatch):
     assert forecast["status"] == "success"
     assert forecast["zoo"]["id"] == "chicago"
     assert len(forecast["forecast"]) == 2
+
+
+def test_get_weather_forecast_returns_the_requested_visit_date(monkeypatch):
+    monkeypatch.setattr(server, "server_date", lambda: date(2026, 8, 31))
+    monkeypatch.setattr(
+        server,
+        "fetch_json",
+        lambda *args, **kwargs: {
+            "daily": {
+                "time": ["2026-08-31", "2026-09-01", "2026-09-03"],
+                "weather_code": [1, 3, 51],
+                "temperature_2m_min": [16, 14, 18],
+                "temperature_2m_max": [25, 22, 27],
+                "precipitation_probability_max": [10, 40, 30],
+            }
+        },
+    )
+
+    forecast = server.get_weather_forecast("chicago", visit_date="2026-09-03")
+
+    assert forecast["status"] == "success"
+    assert forecast["forecast"] == [
+        {
+            "date": "2026-09-03",
+            "weather_code": 51,
+            "temperature_min_c": 18,
+            "temperature_max_c": 27,
+            "precipitation_probability_max": 30,
+        }
+    ]
+
+
+def test_get_weather_forecast_rejects_dates_outside_seven_day_window(monkeypatch):
+    monkeypatch.setattr(server, "server_date", lambda: date(2026, 8, 31))
+
+    result = server.get_weather_forecast("chicago", visit_date="2026-09-07")
+
+    assert result == {
+        "status": "error",
+        "error_message": "visit_date must be between today and six days from today.",
+    }
+
+
+def test_get_weather_forecast_rejects_malformed_visit_dates():
+    result = server.get_weather_forecast("chicago", visit_date="coming Sunday")
+
+    assert result == {
+        "status": "error",
+        "error_message": "visit_date must use ISO format: YYYY-MM-DD.",
+    }
 
 
 def test_weather_tools_reject_unknown_zoo_ids():
