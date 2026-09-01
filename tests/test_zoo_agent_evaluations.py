@@ -89,3 +89,15 @@ def test_set_zoo_id_rejects_an_unknown_location(agent_module):
 
     assert result["status"] == "error"
     assert "ZOO_ID" not in context.state
+
+
+def test_get_shared_location_uses_only_server_owned_state(agent_module):
+    context = SimpleNamespace(
+        state={"USER_LOCATION_LATITUDE": 40.1, "USER_LOCATION_LONGITUDE": -83.2}
+    )
+
+    assert agent_module.get_shared_location(context) == {
+        "status": "success",
+        "latitude": 40.1,
+        "longitude": -83.2,
+    }
