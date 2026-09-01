@@ -111,7 +111,7 @@ def test_create_session_validates_and_forwards_shared_location(client, monkeypat
     )
 
     assert response.status_code == 200
-    assert calls[0]["state"] == {
+    assert calls[0] == {
         "USER_ROLE": "guest",
         "USER_LOCATION_LATITUDE": 40.123,
         "USER_LOCATION_LONGITUDE": -83.234,
