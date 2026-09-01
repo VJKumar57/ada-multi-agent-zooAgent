@@ -17,6 +17,9 @@
     .message { max-width: 82%; padding: 14px 16px; border-radius: 7px; white-space: pre-wrap; line-height: 1.45; font-family: "Trebuchet MS", sans-serif; }
     .guide { background: var(--leaf); border-left: 4px solid var(--moss); }
     .user { background: var(--coral); color: white; justify-self: end; }
+    .thinking { display: inline-flex; align-items: center; gap: 10px; }
+    .spinner { width: 18px; height: 18px; border: 3px solid #9cbea5; border-top-color: var(--moss); border-radius: 50%; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
     #auth { width: min(440px, 100%); margin: 8vh auto 0; padding: 32px; background: #fffdf8; border: 1px solid var(--line); border-top: 5px solid var(--moss); border-radius: 8px; box-shadow: 0 18px 40px rgba(23, 33, 29, .12); font-family: "Trebuchet MS", sans-serif; }
     .auth-brand { color: var(--moss); font: 700 .8rem "Trebuchet MS", sans-serif; letter-spacing: .08em; text-transform: uppercase; }
     #auth h1 { margin: 10px 0 8px; font-size: 2.1rem; }
@@ -43,7 +46,7 @@
     <section id="auth" aria-label="Sign in">
       <div class="auth-brand">Zoo Tour Guide</div>
       <h1>Plan your visit.</h1>
-      <p>Sign in to ask about animals, tickets, and Zoo Cafe meals.</p>
+      <p>Sign in to plan visits, routes, animals, tickets, and Zoo Cafe meals.</p>
       <h2>Sign in to continue</h2>
       <div class="auth-fields">
         <input id="email" type="email" autocomplete="email" placeholder="Email address" aria-label="Email address">
@@ -64,10 +67,10 @@
     <section id="auth"><p>Authentication has not been configured for this deployment.</p></section>
     {% endif %}
     <section id="chat-app" aria-label="Zoo Tour Guide chat">
-      <header><h1>Zoo Tour Guide</h1><p>Ask about animals, tickets, passes, and Zoo Cafe meals.</p></header>
+      <header><h1>Zoo Tour Guide</h1><p>Ask about four Zoo locations, routes, animals, tickets, passes, and Zoo Cafe meals.</p></header>
       <div class="account-bar"><span id="account-name"></span><button id="sign-out" type="button">Sign out</button></div>
-      <section id="messages" aria-live="polite"><div class="message guide">Hello. Which animal, Zoo pass, or meal would you like to learn about?</div></section>
-      <form id="chat-form"><input id="message" aria-label="Your question" autocomplete="off" placeholder="Ask about elephants, a family pass, or a 1,000-calorie meal..." maxlength="1000" required disabled><button id="send" type="submit" disabled>Send</button></form>
+      <section id="messages" aria-live="polite"><div class="message guide">Hello. Which Zoo location, route, animal, pass, or meal would you like to learn about?</div></section>
+      <form id="chat-form"><input id="message" aria-label="Your question" autocomplete="off" placeholder="Ask about a Chicago Zoo route, elephants, or a family pass..." maxlength="1000" required disabled><button id="send" type="submit" disabled>Send</button></form>
     </section>
   </main>
   {% if firebase_enabled %}
@@ -82,6 +85,19 @@
     let session;
     let currentUser;
     const add = (text, type) => { const item = document.createElement('div'); item.className = `message ${type}`; item.textContent = text; messages.append(item); item.scrollIntoView({ behavior: 'smooth', block: 'end' }); };
+    const addThinking = () => {
+      const item = document.createElement('div');
+      const spinner = document.createElement('span');
+      spinner.className = 'spinner';
+      spinner.setAttribute('aria-hidden', 'true');
+      item.className = 'message guide thinking';
+      item.setAttribute('role', 'status');
+      item.textContent = 'The guide is thinking';
+      item.prepend(spinner);
+      messages.append(item);
+      item.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      return item;
+    };
     const authenticatedFetch = async (url, options = {}) => {
       const token = await currentUser.getIdToken();
       const headers = new Headers(options.headers);
@@ -135,6 +151,7 @@
       const message = input.value.trim();
       if (!currentUser || !message) return;
       add(message, 'user'); input.value = ''; input.disabled = button.disabled = true;
+      const thinking = addThinking();
       try {
         session ??= await createSession();
         const response = await authenticatedFetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: session.sessionId, message }) });
@@ -145,7 +162,7 @@
         if (!response.ok) throw new Error(data.error || 'The guide could not answer right now.');
         add(data.answer, 'guide');
       } catch (error) { add(error.message, 'guide'); }
-      finally { input.disabled = button.disabled = false; input.focus(); }
+      finally { thinking.remove(); input.disabled = button.disabled = false; input.focus(); }
     });
   </script>
 </body>

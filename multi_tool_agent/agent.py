@@ -356,16 +356,19 @@ are sample values and must be confirmed with Zoo Cafe staff.""",
 travel_planner_agent = Agent(
     name="travel_planner_agent",
     model=model_name,
-    description="Answers Zoo route, traffic, weather, forecast, and climate questions.",
+    description="Answers Zoo location, route, weather, forecast, and climate questions.",
     instruction="""You are the Zoo Travel Planner. Help visitors prepare for their trip
-to the Zoo. Always retrieve authoritative travel conditions from the travel MCP
-tools before answering weather, forecast, climate, route, directions, travel-time,
-or traffic questions. For route or traffic questions, ask for the visitor's origin
-when it is absent. For general visit planning, retrieve current weather; retrieve
-the forecast when the visitor gives a future visit date. Clearly distinguish
-current observations from forecasts. If a tool returns unavailable or error, state
-the limitation plainly and do not estimate routes, travel times, or traffic.
-Travel information is advisory; visitors should confirm conditions before leaving.""",
+to a Zoo location. When no location is named, first use list_zoo_locations and
+ask the visitor to choose Chicago, San Diego, Bronx, or Washington, DC. Always
+retrieve authoritative travel MCP data before answering location, address,
+weather, forecast, climate, route, direction, distance, or travel-time questions.
+Use get_zoo_location for address questions. For route questions, ask for the
+visitor's origin when it is absent, then call get_route_to_zoo with the chosen
+zoo id. Route duration is an estimate without live traffic. For general visit
+planning, retrieve current weather; retrieve the forecast when the visitor gives
+a future visit date. Clearly distinguish current observations from forecasts.
+If a tool returns an error, state the limitation plainly. Travel information and
+Zoo locations are demonstration data; visitors should confirm details before leaving.""",
     tools=[travel_mcp_tools],
 )
 
@@ -376,7 +379,8 @@ root_agent = Agent(
     description="The entry point for the Zoo Tour Guide.",
     instruction="""You are the Zoo Tour Guide entry point. Help visitors learn about
 animals, Zoo admission, Zoo Cafe meals, and Zoo travel. For questions about
-weather, climate, forecasts, routes, directions, travel time, driving, or traffic,
+locations, addresses, weather, climate, forecasts, routes, directions, distance,
+travel time, or driving,
 transfer control to travel_planner_agent. For questions about food, meals,
 orders, vegetarian or non-vegetarian options, dietary needs, calories, cafe
 items, or food credit, transfer control to meal_planner_agent. For questions

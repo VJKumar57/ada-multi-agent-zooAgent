@@ -9,7 +9,7 @@ A multi-agent Zoo Tour Guide deployed on Google Cloud Run. It answers questions 
 | Zoo Tour Guide UI | Configured deployment region | Obtain with `gcloud run services describe` | Browser chat interface |
 | ADK agent API | Configured deployment region | Obtain with `gcloud run services describe` | Agent runtime and REST API |
 | Zoo MCP server | Configured deployment region | Obtain with `gcloud run services describe` | Internal zoo data tools |
-| Zoo Travel MCP server | Configured deployment region | Obtain with `gcloud run services describe` | Internal weather, forecast, route, and traffic tools |
+| Zoo Travel MCP server | Configured deployment region | Obtain with `gcloud run services describe` | Internal location, weather, forecast, and route tools |
 
 ## Architecture
 
@@ -75,7 +75,7 @@ Sibling specialists of `tour_guide_workflow` are:
 
 1. `ticket_information_agent`: retrieves the current sample Zoo rates for day, night, half-day, half-night, weekly, monthly, yearly, individual, family, resident, and non-resident passes.
 2. `meal_planner_agent`: recommends dietary-aware Zoo Cafe selections, calculates order prices and calories, and applies the $20 food credit included with an eligible full-day pass.
-3. `travel_planner_agent`: retrieves current weather and forecasts through the Zoo Travel MCP server. It asks for an origin before a route or traffic lookup, distinguishes current observations from forecasts, and does not estimate travel time or traffic when a provider is unavailable.
+3. `travel_planner_agent`: helps visitors choose one of four demonstration Zoo locations, retrieves weather and forecasts, provides configured location details, and calculates traffic-free driving distance and estimated duration after it receives an origin.
 
 Zoo Cafe prices, calorie counts, and food-credit rules are sample data for this demonstration. Replace them with an approved cafe catalog before production use.
 
@@ -88,7 +88,7 @@ Zoo Cafe prices, calorie counts, and food-credit rules are sample data for this 
 | Internal data connection | Model Context Protocol (MCP), Streamable HTTP |
 | MCP client | `MCPToolset` and `StreamableHTTPConnectionParams` |
 | Zoo tools | `find_animals(query)`, `list_animals()` |
-| Zoo travel tools | `get_zoo_weather()`, `get_weather_forecast(days)`, `get_route_to_zoo(origin)`, `get_traffic_conditions(origin)` |
+| Zoo travel tools | `list_zoo_locations()`, `get_zoo_location(zoo_id)`, `get_zoo_weather(zoo_id)`, `get_weather_forecast(zoo_id, days)`, `get_route_to_zoo(origin, zoo_id)` |
 | General knowledge tool | LangChain `WikipediaQueryRun` |
 | Chat UI | Flask, vanilla HTML/CSS/JavaScript |
 | Hosting | Google Cloud Run source deployment |
@@ -161,16 +161,13 @@ MODEL=gemini-2.5-flash
 MCP_SERVER_URL=https://zoo-mcp-server-PROJECT_NUMBER.us-west1.run.app/mcp
 TRAVEL_MCP_SERVER_URL=https://zoo-travel-mcp-server-PROJECT_NUMBER.us-west1.run.app/mcp
 MCP_SERVER_AUTHENTICATED=FALSE
-ZOO_NAME=Zoo Tour Guide
-ZOO_LATITUDE=41.8781
-ZOO_LONGITUDE=-87.6298
-ROUTE_PROVIDER=unavailable
 UPSTREAM_TIMEOUT_SECONDS=10
+NOMINATIM_USER_AGENT=zoo-tour-guide-demo/1.0 (contact: YOUR_CONTACT_EMAIL)
 ```
 
 Use `MCP_SERVER_AUTHENTICATED=TRUE` for a protected Cloud Run MCP service; the agent obtains and sends a Google identity token. The browser UI also obtains an identity token before calling the private ADK agent API.
 
-The travel MCP server starts with Open-Meteo for weather and forecast data and requires no API key. Set `ZOO_NAME`, `ZOO_LATITUDE`, and `ZOO_LONGITUDE` to the actual Zoo before deployment. `ROUTE_PROVIDER=unavailable` deliberately returns a structured `unavailable` result for routes and live traffic rather than presenting estimates. A future Google Maps Routes provider must remain server-side, use a billing-enabled Google Maps project and an approved key or workload identity, and preserve the same MCP tool contracts.
+The travel MCP server uses Open-Meteo for weather and forecasts, Nominatim for origin geocoding, and OSRM for traffic-free driving distance and duration estimates. These public services require no API key, but Nominatim requests must identify the deployment with `NOMINATIM_USER_AGENT` and must be kept within its usage policy. The default Chicago, San Diego, Bronx, and Washington, DC locations are demonstration data. Replace them with approved locations by setting `ZOO_LOCATIONS_JSON` to a JSON array whose entries provide `id`, `name`, `address`, `latitude`, and `longitude`.
 
 Cloud Run does not upload nested `.env` files by default. Pass these values with `--set-env-vars` during deployment.
 
@@ -236,7 +233,7 @@ gcloud run deploy zoo-travel-mcp-server \
   --max-instances 2 \
   --concurrency 10 \
   --timeout 120 \
-  --set-env-vars "ZOO_NAME=Zoo Tour Guide,ZOO_LATITUDE=41.8781,ZOO_LONGITUDE=-87.6298,ROUTE_PROVIDER=unavailable,UPSTREAM_TIMEOUT_SECONDS=10"
+  --set-env-vars "UPSTREAM_TIMEOUT_SECONDS=10,NOMINATIM_USER_AGENT=zoo-tour-guide-demo/1.0 (contact: YOUR_CONTACT_EMAIL)"
 ```
 
 ### 3. Deploy the ADK Agent API
@@ -309,10 +306,10 @@ What is the weather at the zoo today?
 Ask for travel help:
 
 ```text
-What is traffic like from Union Station to the zoo?
+How far is it from Union Station to the Chicago Zoo Demo?
 ```
 
-The Travel Planner should ask for an origin when one is missing. With `ROUTE_PROVIDER=unavailable`, it must state that live traffic is unavailable and not provide an estimate.
+The Travel Planner should ask the visitor to select a Zoo location or provide an origin when either is missing. It should return a traffic-free OSRM distance and estimated driving duration, and identify the Zoo location as demonstration data.
 
 To validate role pricing, assign an account the `employee` or `member` custom claim, sign out and back in to refresh its Firebase ID token, then ask for ticket pricing or a Cafe order total. The response should identify the 10% employee or 5% member discount.
 

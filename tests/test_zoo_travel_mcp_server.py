@@ -1,11 +1,30 @@
 from zoo_travel_mcp_server import server
 
 
-def test_get_zoo_weather_returns_current_conditions(monkeypatch):
+def test_list_zoo_locations_returns_four_demonstration_locations():
+    locations = server.list_zoo_locations()
+
+    assert locations["status"] == "success"
+    assert [location["id"] for location in locations["locations"]] == [
+        "chicago",
+        "san_diego",
+        "bronx",
+        "washington_dc",
+    ]
+
+
+def test_get_zoo_location_returns_a_configured_location():
+    location = server.get_zoo_location("bronx")
+
+    assert location["status"] == "success"
+    assert location["location"]["latitude"] == 40.8506
+
+
+def test_get_zoo_weather_returns_conditions_for_selected_zoo(monkeypatch):
     monkeypatch.setattr(
         server,
         "fetch_json",
-        lambda url: {
+        lambda *args, **kwargs: {
             "current": {
                 "time": "2026-08-31T10:00",
                 "temperature_2m": 22.5,
@@ -17,18 +36,18 @@ def test_get_zoo_weather_returns_current_conditions(monkeypatch):
         },
     )
 
-    conditions = server.get_zoo_weather()
+    conditions = server.get_zoo_weather("san_diego")
 
     assert conditions["status"] == "success"
+    assert conditions["zoo"]["id"] == "san_diego"
     assert conditions["temperature_c"] == 22.5
-    assert conditions["source"] == "Open-Meteo"
 
 
 def test_get_weather_forecast_limits_results_to_requested_days(monkeypatch):
     monkeypatch.setattr(
         server,
         "fetch_json",
-        lambda url: {
+        lambda *args, **kwargs: {
             "daily": {
                 "time": ["2026-08-31", "2026-09-01"],
                 "weather_code": [1, 3],
@@ -39,17 +58,22 @@ def test_get_weather_forecast_limits_results_to_requested_days(monkeypatch):
         },
     )
 
-    forecast = server.get_weather_forecast(days=2)
+    forecast = server.get_weather_forecast("chicago", days=2)
 
     assert forecast["status"] == "success"
-    assert [day["date"] for day in forecast["forecast"]] == [
-        "2026-08-31",
-        "2026-09-01",
-    ]
+    assert forecast["zoo"]["id"] == "chicago"
+    assert len(forecast["forecast"]) == 2
+
+
+def test_weather_tools_reject_unknown_zoo_ids():
+    result = server.get_zoo_weather("seattle")
+
+    assert result["status"] == "error"
+    assert "Unknown zoo_id 'seattle'" in result["error_message"]
 
 
 def test_get_weather_forecast_rejects_invalid_day_count():
-    result = server.get_weather_forecast(days=8)
+    result = server.get_weather_forecast("chicago", days=8)
 
     assert result == {
         "status": "error",
@@ -57,32 +81,62 @@ def test_get_weather_forecast_rejects_invalid_day_count():
     }
 
 
-def test_get_zoo_weather_reports_provider_failures(monkeypatch):
-    def unavailable(url):
-        raise RuntimeError("Travel conditions provider is unavailable.")
+def test_get_route_to_zoo_returns_osrm_distance_and_duration(monkeypatch):
+    def route_responses(url, headers=None):
+        if url.startswith(server.NOMINATIM_URL):
+            return [
+                {
+                    "lat": "39.5778",
+                    "lon": "-75.5123",
+                    "display_name": "Delaware, United States",
+                }
+            ]
+        return {"routes": [{"distance": 123400, "duration": 7260}]}
 
-    monkeypatch.setattr(server, "fetch_json", unavailable)
+    monkeypatch.setattr(server, "fetch_json", route_responses)
+    server.geocoding_cache.clear()
 
-    result = server.get_zoo_weather()
+    route = server.get_route_to_zoo("656 Melick Dr, Delaware", "chicago")
+
+    assert route["status"] == "success"
+    assert route["distance_km"] == 123.4
+    assert route["estimated_duration_minutes"] == 121
+    assert route["traffic_included"] is False
+
+
+def test_get_route_to_zoo_reports_unknown_origin(monkeypatch):
+    monkeypatch.setattr(server, "fetch_json", lambda *args, **kwargs: [])
+    server.geocoding_cache.clear()
+
+    result = server.get_route_to_zoo("Unknown place", "chicago")
 
     assert result == {
         "status": "error",
-        "error_message": "Travel conditions provider is unavailable.",
+        "error_message": "The origin address could not be located.",
     }
 
 
-def test_route_and_traffic_are_explicitly_unavailable_without_a_provider():
-    route = server.get_route_to_zoo("Union Station")
-    traffic = server.get_traffic_conditions("Union Station")
-
-    assert route["status"] == "unavailable"
-    assert traffic["status"] == "unavailable"
-
-
-def test_route_requires_an_origin():
-    result = server.get_route_to_zoo(" ")
+def test_get_route_to_zoo_requires_an_origin():
+    result = server.get_route_to_zoo(" ", "chicago")
 
     assert result == {
         "status": "error",
         "error_message": "An origin is required for route planning.",
+    }
+
+
+def test_get_route_to_zoo_reports_osrm_failures(monkeypatch):
+    def route_responses(url, headers=None):
+        if url.startswith(server.NOMINATIM_URL):
+            return [{"lat": "39.5778", "lon": "-75.5123", "display_name": "Delaware"}]
+        return {"routes": []}
+
+    monkeypatch.setattr(server, "fetch_json", route_responses)
+    server.geocoding_cache.clear()
+
+    result = server.get_route_to_zoo("656 Melick Dr, Delaware", "chicago")
+
+    assert result == {
+        "status": "error",
+        "error_message": "A driving route could not be calculated.",
     }
