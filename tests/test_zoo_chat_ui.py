@@ -74,12 +74,63 @@ def test_execution_trace_includes_agent_transfers_and_tool_names_only():
                 ]
             }
         },
+        {
+            "content": {
+                "parts": [
+                    {
+                        "functionCall": {
+                            "name": "get_shared_location",
+                            "args": {},
+                        }
+                    }
+                ]
+            }
+        },
     ]
 
     assert execution_trace(events) == [
         {"type": "agent", "name": "travel_planner_agent"},
         {"type": "tool", "name": "get_weather_forecast"},
     ]
+
+
+def test_create_session_validates_and_forwards_shared_location(client, monkeypatch):
+    test_client, _ = client
+    calls = []
+
+    def post(*args, **kwargs):
+        calls.append(kwargs["json"])
+        return SimpleNamespace(raise_for_status=lambda: None)
+
+    monkeypatch.setattr(chat_app.requests, "post", post)
+
+    response = test_client.post(
+        "/api/session",
+        headers={"Authorization": "Bearer visitor"},
+        json={"location": {"latitude": 40.1234, "longitude": -83.2345}},
+    )
+
+    assert response.status_code == 200
+    assert calls[0]["state"] == {
+        "USER_ROLE": "guest",
+        "USER_LOCATION_LATITUDE": 40.123,
+        "USER_LOCATION_LONGITUDE": -83.234,
+    }
+
+
+def test_create_session_rejects_invalid_or_extra_location_fields(client):
+    test_client, _ = client
+
+    response = test_client.post(
+        "/api/session",
+        headers={"Authorization": "Bearer visitor"},
+        json={"location": {"latitude": 91, "longitude": -83}},
+    )
+
+    assert response.status_code == 400
+    assert response.get_json() == {
+        "error": "Location coordinates are outside supported ranges."
+    }
 
 
 def test_exact_repeat_uses_cached_answer_for_same_user_and_session(client, monkeypatch):
@@ -166,6 +217,33 @@ def test_dynamic_messages_are_not_answer_cached(client, monkeypatch):
     test_client.post("/api/chat", headers=headers, json=payload)
     test_client.post("/api/chat", headers=headers, json=payload)
 
+    assert len(calls) == 2
+
+
+def test_location_shared_messages_are_not_answer_cached(client, monkeypatch):
+    test_client, _ = client
+    calls = []
+
+    def post(*args, **kwargs):
+        calls.append((args, kwargs))
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: [{"content": {"parts": [{"text": "Nearest Zoo"}]}}],
+        )
+
+    monkeypatch.setattr(chat_app.requests, "post", post)
+    payload = {
+        "sessionId": "location-session",
+        "message": "Which Zoo is nearest?",
+        "locationShared": True,
+    }
+    headers = {"Authorization": "Bearer visitor"}
+
+    first = test_client.post("/api/chat", headers=headers, json=payload)
+    second = test_client.post("/api/chat", headers=headers, json=payload)
+
+    assert first.get_json()["cached"] is False
+    assert second.get_json()["cached"] is False
     assert len(calls) == 2
 
 

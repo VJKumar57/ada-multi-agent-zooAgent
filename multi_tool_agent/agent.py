@@ -49,6 +49,24 @@ def set_zoo_id(tool_context: ToolContext, zoo_id: str) -> dict[str, str]:
     return {"status": "success", "zoo_id": normalized_zoo_id}
 
 
+def get_shared_location(tool_context: ToolContext) -> dict[str, float | str]:
+    """Return consented device coordinates stored by the authenticated Flask UI."""
+    latitude = tool_context.state.get("USER_LOCATION_LATITUDE")
+    longitude = tool_context.state.get("USER_LOCATION_LONGITUDE")
+    if not isinstance(latitude, (int, float)) or not isinstance(
+        longitude, (int, float)
+    ):
+        return {
+            "status": "error",
+            "error_message": "No shared device location is available.",
+        }
+    return {
+        "status": "success",
+        "latitude": float(latitude),
+        "longitude": float(longitude),
+    }
+
+
 TICKET_OPTIONS = {
     "day_pass": {
         "name": "Day Pass",
@@ -402,12 +420,18 @@ ISO `visit_date`. For relative dates such as "coming Sunday", first call
 get_server_date, calculate the ISO date from that result, then call
 get_weather_forecast; do not guess the date. Clearly distinguish current
 observations from forecasts.
+For a visitor asking which Zoo is nearest or closest, first call
+get_shared_location. If it succeeds, call find_nearest_zoo exactly once with
+those coordinates; do not call list_zoo_locations or get_route_to_zoo for that
+request, and never reveal the coordinates. If no device location is available,
+ask the visitor to use the location control or provide a typed origin. After a
+successful nearest-Zoo result, call set_zoo_id with its returned zoo id.
 After get_zoo_location or get_route_to_zoo successfully confirms a Zoo location,
 call set_zoo_id with that returned zoo_id before answering. Do not call set_zoo_id
 from a visitor's text alone.
 If a tool returns an error, state the limitation plainly. Travel information and
 Zoo locations are demonstration data; visitors should confirm details before leaving.""",
-    tools=[travel_mcp_tools, set_zoo_id],
+    tools=[travel_mcp_tools, get_shared_location, set_zoo_id],
 )
 
 
