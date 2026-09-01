@@ -89,7 +89,7 @@ Zoo Cafe prices, calorie counts, and food-credit rules are sample data for this 
 | Agent framework | Google Agent Development Kit (ADK) |
 | Internal data connection | Model Context Protocol (MCP), Streamable HTTP |
 | MCP client | `MCPToolset` and `StreamableHTTPConnectionParams` |
-| Zoo tools | `find_animals(query)`, `list_animals()` |
+| Zoo tools | `find_animals(query, zoo_id)`, `list_animals(zoo_id)`, `get_animal_count(zoo_id)` |
 | Curated knowledge tools | `search_curated_knowledge(query, zoo_id, max_results)` |
 | Zoo travel tools | `get_server_date()`, `list_zoo_locations()`, `get_zoo_location(zoo_id)`, `get_zoo_weather(zoo_id)`, `get_weather_forecast(zoo_id, visit_date, days)`, `get_route_to_zoo(origin, zoo_id)` |
 | General knowledge tool | LangChain `WikipediaQueryRun` |
@@ -97,7 +97,28 @@ Zoo Cafe prices, calorie counts, and food-credit rules are sample data for this 
 | Hosting | Google Cloud Run source deployment |
 | Logging | Google Cloud Logging |
 
-The sample Zoo Animal Directory contains Asha (Asian elephant), Milo (African elephant), Nala (African lion), and Kiko (Red panda).
+The Zoo Animal Directory contains 400 approved demonstration records: 100 for
+each of Chicago, San Diego, Bronx, and Washington, DC. Each location has five
+exclusive species. Asha (Asian elephant), Milo (African elephant), Nala (African
+lion), and Kiko (Red panda) are Chicago demonstration records. Animal queries
+require a Zoo ID confirmed by the Travel MCP service.
+
+### Animal Catalog Configuration
+
+Zoo Directory uses the validated in-memory demonstration catalog by default. Set
+`CATALOG_DATABASE_URL` to use PostgreSQL for directory reads. Store the value in
+Secret Manager and make the database privately reachable from the Zoo MCP service.
+Load the initial catalog or approved catalog changes with:
+
+```bash
+python -m zoo_mcp_server.ingest
+```
+
+The command validates record IDs, approval status, 100-animal Zoo counts, and
+exclusive species before upserting records. It must run as a controlled maintenance
+job, never during a visitor request. The Zoo Directory and Travel MCP services must
+use the same canonical Zoo IDs: `chicago`, `san_diego`, `bronx`, and
+`washington_dc`.
 
 ## Project Layout
 
@@ -299,6 +320,12 @@ gcloud run deploy zoo-mcp-server \
   --concurrency 10 \
   --timeout 120
 ```
+
+This initial deployment uses the validated in-memory catalog. After provisioning
+private PostgreSQL, enable database reads with
+`--set-secrets "CATALOG_DATABASE_URL=catalog-database-url:latest"` and run
+`python -m zoo_mcp_server.ingest` as a Cloud Run Job or authenticated maintenance
+task before sending visitor traffic to the database-backed catalog.
 
 ### 2. Deploy the Zoo Travel MCP Server
 

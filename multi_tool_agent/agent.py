@@ -35,6 +35,20 @@ def add_prompt_to_state(tool_context: ToolContext, prompt: str) -> dict[str, str
     return {"status": "success"}
 
 
+def set_zoo_id(tool_context: ToolContext, zoo_id: str) -> dict[str, str]:
+    """Save a Zoo location confirmed by the Travel MCP service."""
+    normalized_zoo_id = zoo_id.strip().lower()
+    valid_zoo_ids = {"chicago", "san_diego", "bronx", "washington_dc"}
+    if normalized_zoo_id not in valid_zoo_ids:
+        return {
+            "status": "error",
+            "error_message": "A confirmed Zoo location is required.",
+        }
+    tool_context.state["ZOO_ID"] = normalized_zoo_id
+    logging.info("Saved confirmed Zoo ID to workflow state.")
+    return {"status": "success", "zoo_id": normalized_zoo_id}
+
+
 TICKET_OPTIONS = {
     "day_pass": {
         "name": "Day Pass",
@@ -306,11 +320,12 @@ the PROMPT as its query, using the singular form when needed, such as "elephant"
 for "elephants". Do not answer until find_animals returns. Do not say that
 zoo-specific information is unavailable unless find_animals returns no matching
 data. If the question asks about general facts, diet, habitat, or lifespan, call
-search_curated_knowledge after find_animals. Use zoo_id "global" unless a Zoo
-location has already been established by a trusted tool response. Cite its source
-title, version, and updated date in your response. Call Wikipedia only when the
-curated result is empty or missing the requested information, and label it as
-external general research rather than a Zoo source.
+search_curated_knowledge after find_animals. Use the confirmed `ZOO_ID` workflow
+state for both find_animals and search_curated_knowledge. If no confirmed Zoo ID
+exists, ask the visitor to select a Zoo location before calling directory tools.
+Cite curated source title, version, and updated date in your response. Call
+Wikipedia only when the curated result is empty or missing the requested
+information, and label it as external general research rather than a Zoo source.
 """,
     tools=[mcp_tools, knowledge_mcp_tools, wikipedia_tool],
     output_key="RESEARCH_DATA",
@@ -387,9 +402,12 @@ ISO `visit_date`. For relative dates such as "coming Sunday", first call
 get_server_date, calculate the ISO date from that result, then call
 get_weather_forecast; do not guess the date. Clearly distinguish current
 observations from forecasts.
+After get_zoo_location or get_route_to_zoo successfully confirms a Zoo location,
+call set_zoo_id with that returned zoo_id before answering. Do not call set_zoo_id
+from a visitor's text alone.
 If a tool returns an error, state the limitation plainly. Travel information and
 Zoo locations are demonstration data; visitors should confirm details before leaving.""",
-    tools=[travel_mcp_tools],
+    tools=[travel_mcp_tools, set_zoo_id],
 )
 
 
