@@ -119,6 +119,11 @@ The sample Zoo Animal Directory contains Asha (Asian elephant), Milo (African el
 └── requirements.txt         # ADK agent dependencies
 ```
 
+## Roadmap
+
+The planned delivery sequence is in [ROADMAP.md](ROADMAP.md). The current focus
+is evaluation and observability before adding managed Zoo data or retrieval.
+
 ## Prerequisites
 
 - Google Cloud project with billing enabled
@@ -163,6 +168,9 @@ TRAVEL_MCP_SERVER_URL=https://zoo-travel-mcp-server-PROJECT_NUMBER.us-west1.run.
 MCP_SERVER_AUTHENTICATED=FALSE
 UPSTREAM_TIMEOUT_SECONDS=10
 NOMINATIM_USER_AGENT=zoo-tour-guide-demo/1.0 (contact: YOUR_CONTACT_EMAIL)
+CACHE_REDIS_URL=redis://REDIS_HOST:6379/0
+CACHE_KEY_PREFIX=zoo-tour-guide:v1
+TRAVEL_CACHE_MAX_ENTRIES=200
 ```
 
 Use `MCP_SERVER_AUTHENTICATED=TRUE` for a protected Cloud Run MCP service; the agent obtains and sends a Google identity token. The browser UI also obtains an identity token before calling the private ADK agent API.
@@ -170,6 +178,36 @@ Use `MCP_SERVER_AUTHENTICATED=TRUE` for a protected Cloud Run MCP service; the a
 The travel MCP server uses Open-Meteo for weather and forecasts, Nominatim for origin geocoding, and OSRM for traffic-free driving distance and duration estimates. These public services require no API key, but Nominatim requests must identify the deployment with `NOMINATIM_USER_AGENT` and must be kept within its usage policy. The default Chicago, San Diego, Bronx, and Washington, DC locations are demonstration data. Replace them with approved locations by setting `ZOO_LOCATIONS_JSON` to a JSON array whose entries provide `id`, `name`, `address`, `latitude`, and `longitude`.
 
 Cloud Run does not upload nested `.env` files by default. Pass these values with `--set-env-vars` during deployment.
+
+### Cache Configuration
+
+The UI uses `CACHE_REDIS_URL` when configured to cache an exact repeated, eligible
+question for the same authenticated Firebase user and ADK session. A cache hit
+returns the saved final answer and sanitized Activity list without invoking the
+ADK API or Gemini again. Cached entries expire after 30 minutes. Cache keys contain
+only a version prefix, user/session identifiers, and a SHA-256 hash of normalized
+question text; cached values contain only the final answer and sanitized agent/tool
+names. Firebase tokens, Cloud Run identity tokens, raw ADK events, tool arguments,
+tool results, and role state are never cached.
+
+Dynamic and role-dependent requests bypass this answer cache, including weather,
+forecasts, routes, opening hours, dates, tickets, passes, Cafe orders, credits, and
+discounts. Redis connection, read, and write failures fail open: the UI continues
+to call the agent normally.
+
+For a Cloud Run deployment with more than one UI instance, use a private
+Redis-compatible service such as Memorystore and connect it through the service's
+VPC connector. Set `CACHE_REDIS_URL` only on the UI service. Bump
+`CACHE_KEY_PREFIX` (for example, to `zoo-tour-guide:v2`) to invalidate all saved
+answers after changing response behavior. Without `CACHE_REDIS_URL`, exact-answer
+caching is disabled.
+
+The Travel MCP service has bounded, in-memory TTL caches to reduce provider calls:
+geocoding results last 14 days, current weather 15 minutes, forecasts 6 hours, and
+traffic-free OSRM routes 1 hour. `TRAVEL_CACHE_MAX_ENTRIES` defaults to 200 entries
+per cache. These provider caches are per Cloud Run instance and are cleared by a
+restart or scale-out; a future shared Redis adapter can be added when cross-instance
+provider-cache reuse becomes necessary.
 
 ### Firebase Authentication and Personas
 
