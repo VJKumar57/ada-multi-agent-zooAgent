@@ -34,10 +34,12 @@
     #auth-status { min-height: 1.3em; margin: 16px 0 0; color: #496254; font-size: .9rem; }
     .account-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; color: #496254; font: .9rem "Trebuchet MS", sans-serif; }
     #sign-out { display: none; min-height: 34px; padding: 0 12px; background: transparent; border: 1px solid #718177; color: var(--ink); }
-    form { grid-column: 1; display: grid; grid-template-columns: 1fr auto; gap: 10px; border-top: 1px solid #cfcbbe; padding-top: 18px; }
+    form { grid-column: 1; display: grid; grid-template-columns: 1fr auto auto; gap: 10px; border-top: 1px solid #cfcbbe; padding-top: 18px; }
     input { min-width: 0; border: 1px solid #8b998c; border-radius: 5px; padding: 14px; font: 1rem "Trebuchet MS", sans-serif; }
     button { border: 0; border-radius: 5px; background: var(--moss); color: white; cursor: pointer; padding: 0 18px; font: 700 1rem "Trebuchet MS", sans-serif; }
     button:disabled { opacity: .6; cursor: wait; }
+    #share-location { background: #e5eee4; color: var(--ink); border: 1px solid #8b998c; }
+    #location-status { grid-column: 1 / -1; min-height: 1.2em; margin: 0; color: #496254; font: .85rem "Trebuchet MS", sans-serif; }
     .execution-panel { grid-column: 2; grid-row: 3 / span 2; align-self: start; position: sticky; top: 24px; margin-top: 24px; border-top: 3px solid var(--coral); padding-top: 12px; font-family: "Trebuchet MS", sans-serif; }
     .execution-panel h2 { margin: 0; font-size: 1rem; }
     #execution { display: grid; gap: 8px; margin-top: 14px; }
@@ -78,7 +80,7 @@
       <header><h1>Zoo Tour Guide</h1><p>Ask about four Zoo locations, routes, animals, tickets, passes, and Zoo Cafe meals.</p></header>
       <div class="account-bar"><span id="account-name"></span><button id="sign-out" type="button">Sign out</button></div>
       <section id="messages" aria-live="polite"><div class="message guide">Hello. Which Zoo location, route, animal, pass, or meal would you like to learn about?</div></section>
-      <form id="chat-form"><input id="message" aria-label="Your question" autocomplete="off" placeholder="Ask about a Chicago Zoo route, elephants, or a family pass..." maxlength="1000" required disabled><button id="send" type="submit" disabled>Send</button></form>
+      <form id="chat-form"><input id="message" aria-label="Your question" autocomplete="off" placeholder="Ask about a Chicago Zoo route, elephants, or a family pass..." maxlength="1000" required disabled><button id="share-location" type="button" aria-label="Use my location for the next request" disabled>Use location</button><button id="send" type="submit" disabled>Send</button><p id="location-status" role="status"></p></form>
       <aside class="execution-panel" aria-live="polite" aria-label="Request activity">
         <h2>Activity</h2>
         <div id="execution"><span class="execution-empty">Waiting for a request.</span></div>
@@ -94,9 +96,12 @@
     const form = document.querySelector('#chat-form');
     const input = document.querySelector('#message');
     const button = document.querySelector('#send');
+    const locationButton = document.querySelector('#share-location');
+    const locationStatus = document.querySelector('#location-status');
     const execution = document.querySelector('#execution');
     let session;
     let currentUser;
+    let sharedLocation;
     const add = (text, type) => { const item = document.createElement('div'); item.className = `message ${type}`; item.textContent = text; messages.append(item); item.scrollIntoView({ behavior: 'smooth', block: 'end' }); };
     const addThinking = () => {
       const item = document.createElement('div');
@@ -139,8 +144,12 @@
       headers.set('Authorization', `Bearer ${token}`);
       return fetch(url, { ...options, headers });
     };
-    const createSession = async () => {
-      const response = await authenticatedFetch('/api/session', { method: 'POST' });
+    const createSession = async location => {
+      const response = await authenticatedFetch('/api/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: location ? JSON.stringify({ location }) : undefined,
+      });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Could not create a session.');
       return data;
@@ -155,7 +164,9 @@
     const setAuthenticatedState = user => {
       currentUser = user;
       session = undefined;
-      input.disabled = button.disabled = !user;
+      sharedLocation = undefined;
+      locationStatus.textContent = '';
+      input.disabled = button.disabled = locationButton.disabled = !user;
       authPanel.style.display = user ? 'none' : 'block';
       chatApp.style.display = user ? 'grid' : 'none';
       signOut.style.display = user ? 'inline-block' : 'none';
@@ -181,6 +192,30 @@
     });
     signOut.addEventListener('click', () => auth.signOut());
     {% endif %}
+    locationButton.addEventListener('click', () => {
+      if (!currentUser || !navigator.geolocation) {
+        locationStatus.textContent = 'Location sharing is unavailable in this browser.';
+        return;
+      }
+      locationButton.disabled = true;
+      locationStatus.textContent = 'Requesting your location...';
+      navigator.geolocation.getCurrentPosition(
+        position => {
+          sharedLocation = {
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+          };
+          session = undefined;
+          locationStatus.textContent = 'Location will be used for your next request.';
+          locationButton.disabled = false;
+        },
+        () => {
+          locationStatus.textContent = 'Location was not shared. You can provide an address instead.';
+          locationButton.disabled = false;
+        },
+        { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 },
+      );
+    });
     form.addEventListener('submit', async event => {
       event.preventDefault();
       const message = input.value.trim();
@@ -188,9 +223,12 @@
       add(message, 'user'); input.value = ''; input.disabled = button.disabled = true;
       renderExecution();
       const thinking = addThinking();
+      const locationShared = Boolean(sharedLocation);
       try {
-        session ??= await createSession();
-        const response = await authenticatedFetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: session.sessionId, message }) });
+        session ??= await createSession(sharedLocation);
+        sharedLocation = undefined;
+        locationStatus.textContent = '';
+        const response = await authenticatedFetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: session.sessionId, message, locationShared }) });
         const body = await response.text();
         let data;
         try { data = JSON.parse(body); }
@@ -201,7 +239,12 @@
           ? [{ type: 'cache', name: 'Reused a previous response.' }, ...(data.execution || [])]
           : data.execution);
       } catch (error) { add(error.message, 'guide'); }
-      finally { thinking.remove(); input.disabled = button.disabled = false; input.focus(); }
+      finally {
+        sharedLocation = undefined;
+        if (locationShared) session = undefined;
+        locationStatus.textContent = '';
+        thinking.remove(); input.disabled = button.disabled = false; input.focus();
+      }
     });
   </script>
 </body>

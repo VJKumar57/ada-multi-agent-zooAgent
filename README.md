@@ -77,7 +77,7 @@ Sibling specialists of `tour_guide_workflow` are:
 
 1. `ticket_information_agent`: retrieves the current sample Zoo rates for day, night, half-day, half-night, weekly, monthly, yearly, individual, family, resident, and non-resident passes.
 2. `meal_planner_agent`: recommends dietary-aware Zoo Cafe selections, calculates order prices and calories, and applies the $20 food credit included with an eligible full-day pass.
-3. `travel_planner_agent`: helps visitors choose one of four demonstration Zoo locations, retrieves weather and forecasts, provides configured location details, and calculates traffic-free driving distance and estimated duration after it receives an origin.
+3. `travel_planner_agent`: helps visitors choose one of four demonstration Zoo locations, retrieves weather and forecasts, provides configured location details, and calculates traffic-free driving distance and estimated duration after it receives an origin. For a nearest-Zoo question, it can use a visitor's consented browser location to make one traffic-free route comparison.
 
 Zoo Cafe prices, calorie counts, and food-credit rules are sample data for this demonstration. Replace them with an approved cafe catalog before production use.
 
@@ -91,7 +91,7 @@ Zoo Cafe prices, calorie counts, and food-credit rules are sample data for this 
 | MCP client | `MCPToolset` and `StreamableHTTPConnectionParams` |
 | Zoo tools | `find_animals(query, zoo_id)`, `list_animals(zoo_id)`, `get_animal_count(zoo_id)` |
 | Curated knowledge tools | `search_curated_knowledge(query, zoo_id, max_results)` |
-| Zoo travel tools | `get_server_date()`, `list_zoo_locations()`, `get_zoo_location(zoo_id)`, `get_zoo_weather(zoo_id)`, `get_weather_forecast(zoo_id, visit_date, days)`, `get_route_to_zoo(origin, zoo_id)` |
+| Zoo travel tools | `get_server_date()`, `list_zoo_locations()`, `get_zoo_location(zoo_id)`, `get_zoo_weather(zoo_id)`, `get_weather_forecast(zoo_id, visit_date, days)`, `get_route_to_zoo(origin, zoo_id)`, `find_nearest_zoo(origin_latitude, origin_longitude)` |
 | General knowledge tool | LangChain `WikipediaQueryRun` |
 | Chat UI | Flask, vanilla HTML/CSS/JavaScript |
 | Hosting | Google Cloud Run source deployment |
@@ -252,7 +252,20 @@ tool results, and role state are never cached.
 Dynamic and role-dependent requests bypass this answer cache, including weather,
 forecasts, routes, opening hours, dates, tickets, passes, Cafe orders, credits, and
 discounts. Redis connection, read, and write failures fail open: the UI continues
-to call the agent normally.
+to call the agent normally. A request marked as using consented device location
+also bypasses the answer cache.
+
+### Optional Device Location
+
+The browser requests device location only after the visitor selects **Use location**.
+It is optional and requires a secure browser context. The browser keeps the result
+only until the next chat request, then clears it. Flask accepts only finite latitude
+and longitude JSON numbers within valid geographic ranges, rounds them to three
+decimal places, and places that coarse value in the server-created ADK session.
+Raw coordinates are not logged, placed in Activity, added to Redis, or sent to
+Nominatim. The Travel MCP service compares traffic-free OSRM routes internally and
+returns only the nearest configured Zoo; visitors can always provide a typed origin
+instead.
 
 For a Cloud Run deployment with more than one UI instance, use a private
 Redis-compatible service such as Memorystore and connect it through the service's

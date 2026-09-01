@@ -220,6 +220,70 @@ def test_get_route_to_zoo_returns_osrm_distance_and_duration(monkeypatch):
     assert route["traffic_included"] is False
 
 
+def test_find_nearest_zoo_compares_routes_without_geocoding(monkeypatch):
+    distances = iter([300000, 2800000, 600000, 700000])
+    calls = []
+
+    def route_responses(url, headers=None):
+        calls.append(url)
+        return {"routes": [{"distance": next(distances), "duration": 3600}]}
+
+    monkeypatch.setattr(server, "fetch_json", route_responses)
+
+    result = server.find_nearest_zoo(40.0, -83.0)
+
+    assert result["status"] == "success"
+    assert result["zoo"]["id"] == "chicago"
+    assert result["distance_km"] == 300.0
+    assert result["traffic_included"] is False
+    assert len(calls) == 4
+    assert all(not url.startswith(server.NOMINATIM_URL) for url in calls)
+
+
+def test_find_nearest_zoo_rejects_invalid_coordinates():
+    result = server.find_nearest_zoo(91, -83)
+
+    assert result == {
+        "status": "error",
+        "error_message": "Latitude must be between -90 and 90.",
+    }
+
+    result = server.find_nearest_zoo(float("nan"), -83)
+
+    assert result == {
+        "status": "error",
+        "error_message": "Latitude and longitude must be finite numbers.",
+    }
+
+
+def test_find_nearest_zoo_reuses_cached_routes(monkeypatch):
+    calls = []
+
+    def route_responses(url, headers=None):
+        calls.append(url)
+        return {"routes": [{"distance": 100000, "duration": 3600}]}
+
+    monkeypatch.setattr(server, "fetch_json", route_responses)
+
+    server.find_nearest_zoo(40.0, -83.0)
+    server.find_nearest_zoo(40.0, -83.0)
+
+    assert len(calls) == 4
+
+
+def test_find_nearest_zoo_returns_an_error_when_routing_is_unavailable(monkeypatch):
+    monkeypatch.setattr(
+        server,
+        "fetch_json",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("Unavailable")),
+    )
+
+    assert server.find_nearest_zoo(40.0, -83.0) == {
+        "status": "error",
+        "error_message": "Unavailable",
+    }
+
+
 def test_route_cache_reuses_geocoding_and_osrm_results(monkeypatch):
     calls = []
 

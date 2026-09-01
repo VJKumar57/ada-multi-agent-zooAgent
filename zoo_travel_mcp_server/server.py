@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import time
 from collections import OrderedDict
@@ -354,6 +355,48 @@ def calculate_route(
         return route
     except (IndexError, KeyError, TypeError, ValueError) as error:
         raise RuntimeError("A driving route could not be calculated.") from error
+
+
+def coordinate_origin(latitude: float, longitude: float) -> dict[str, float | str]:
+    """Validate browser-provided coordinates without reverse geocoding them."""
+    if (
+        isinstance(latitude, bool)
+        or isinstance(longitude, bool)
+        or not isinstance(latitude, (int, float))
+        or not isinstance(longitude, (int, float))
+        or not math.isfinite(latitude)
+        or not math.isfinite(longitude)
+    ):
+        raise ValueError("Latitude and longitude must be finite numbers.")
+    if not -90 <= latitude <= 90:
+        raise ValueError("Latitude must be between -90 and 90.")
+    if not -180 <= longitude <= 180:
+        raise ValueError("Longitude must be between -180 and 180.")
+    return {
+        "latitude": round(latitude, 3),
+        "longitude": round(longitude, 3),
+        "display_name": "Shared location",
+    }
+
+
+@travel_mcp.tool()
+def find_nearest_zoo(origin_latitude: float, origin_longitude: float) -> dict[str, Any]:
+    """Find the nearest Zoo by traffic-free driving route from shared coordinates."""
+    try:
+        origin = coordinate_origin(origin_latitude, origin_longitude)
+        routes = [
+            (zoo, calculate_route(origin, zoo)) for zoo in ZOO_LOCATIONS.values()
+        ]
+    except (RuntimeError, ValueError) as error:
+        return error_response(str(error))
+    zoo, route = min(routes, key=lambda item: item[1]["distance_km"])
+    return {
+        "status": "success",
+        "zoo": zoo,
+        "source": "OpenStreetMap OSRM",
+        "traffic_included": False,
+        **route,
+    }
 
 
 @travel_mcp.tool()

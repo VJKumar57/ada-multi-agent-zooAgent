@@ -2,6 +2,7 @@ import os
 import hashlib
 import json
 import logging
+import math
 import re
 import time
 import uuid
@@ -203,6 +204,32 @@ def is_rate_limited() -> bool:
     return False
 
 
+def shared_location(payload: dict) -> dict[str, float] | None:
+    """Validate optional browser location data before creating an ADK session."""
+    location = payload.get("location")
+    if location is None:
+        return None
+    if (
+        not isinstance(location, dict)
+        or set(location) != {"latitude", "longitude"}
+    ):
+        raise ValueError("Location must contain only latitude and longitude.")
+    latitude = location["latitude"]
+    longitude = location["longitude"]
+    if (
+        isinstance(latitude, bool)
+        or isinstance(longitude, bool)
+        or not isinstance(latitude, (int, float))
+        or not isinstance(longitude, (int, float))
+        or not math.isfinite(latitude)
+        or not math.isfinite(longitude)
+    ):
+        raise ValueError("Location coordinates must be numbers.")
+    if not -90 <= latitude <= 90 or not -180 <= longitude <= 180:
+        raise ValueError("Location coordinates are outside supported ranges.")
+    return {"latitude": round(latitude, 3), "longitude": round(longitude, 3)}
+
+
 @app.get("/")
 def index():
     """Render the Zoo Tour Guide chat page."""
@@ -220,11 +247,20 @@ def create_session():
     if is_rate_limited():
         return jsonify({"error": "Too many requests. Please try again shortly."}), 429
 
+    payload = request.get_json(silent=True) or {}
+    try:
+        location = shared_location(payload)
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
     user_id = f"firebase-{g.user['uid']}"
     session_id = str(uuid.uuid4())
+    state = {"USER_ROLE": g.user["role"]}
+    if location:
+        state["USER_LOCATION_LATITUDE"] = location["latitude"]
+        state["USER_LOCATION_LONGITUDE"] = location["longitude"]
     response = requests.post(
         f"{agent_url}/apps/{app_name}/users/{user_id}/sessions/{session_id}",
-        json={"state": {"USER_ROLE": g.user["role"]}},
+        json={"state": state},
         headers=agent_headers(),
         timeout=agent_request_timeout,
     )
@@ -232,8 +268,10 @@ def create_session():
     return jsonify({"userId": user_id, "sessionId": session_id})
 
 
-def execution_trace(events: list[dict]) -> list[dict[str, str]]:
-    """Extract agent transfers and tool calls without exposing tool arguments or results."""
+def execution_trace(
+    events: list[dict],
+) -> list[dict[str, str]]:
+    """Extract activity without exposing tool arguments or results."""
     steps = []
     for event in events:
         transferred_agent = event.get("actions", {}).get("transferToAgent")
@@ -241,7 +279,10 @@ def execution_trace(events: list[dict]) -> list[dict[str, str]]:
             steps.append({"type": "agent", "name": transferred_agent})
         for part in event.get("content", {}).get("parts", []):
             function_call = part.get("functionCall")
-            if function_call and function_call.get("name") != "transfer_to_agent":
+            if function_call and function_call.get("name") not in {
+                "transfer_to_agent",
+                "get_shared_location",
+            }:
                 steps.append({"type": "tool", "name": function_call["name"]})
     return steps
 
@@ -258,14 +299,17 @@ def chat():
     payload = request.get_json(silent=True) or {}
     session_id = payload.get("sessionId")
     message = payload.get("message", "").strip()
+    location_shared = payload.get("locationShared", False)
     if not session_id or not message:
         return jsonify({"error": "A session and message are required."}), 400
+    if not isinstance(location_shared, bool):
+        return jsonify({"error": "locationShared must be a boolean."}), 400
     if len(message) > 1_000:
         return jsonify({"error": "Messages must be 1,000 characters or fewer."}), 400
 
     user_id = f"firebase-{g.user['uid']}"
     cache_key = answer_cache_key(user_id, session_id, message)
-    cacheable = is_cacheable_message(message)
+    cacheable = not location_shared and is_cacheable_message(message)
     if cacheable:
         cached = cached_answer(cache_key)
         if cached:
