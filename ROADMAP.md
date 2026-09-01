@@ -23,6 +23,8 @@
 - Index approved Zoo documents and policies with source attribution.
 - Retrieve Zoo sources before general knowledge, with evaluation coverage for
   grounding and stale content.
+- Initial implementation: a private Knowledge MCP service uses BM25 retrieval
+  over versioned approved Markdown documents and returns source attribution.
 
 ## 4. Tour Planner Agent
 

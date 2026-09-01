@@ -1,3 +1,4 @@
 mcp>=1.24,<2
-uvicorn
+rank-bm25
+google-genai
 psycopg[binary]

@@ -15,6 +15,9 @@ def agent_module(monkeypatch):
     monkeypatch.setenv(
         "TRAVEL_MCP_SERVER_URL", "https://zoo-travel-mcp.example.com/mcp"
     )
+    monkeypatch.setenv(
+        "KNOWLEDGE_MCP_SERVER_URL", "https://zoo-knowledge-mcp.example.com/mcp"
+    )
     monkeypatch.setenv("MCP_SERVER_AUTHENTICATED", "FALSE")
     monkeypatch.setattr(
         google.cloud.logging,
@@ -68,3 +71,21 @@ def test_cafe_evaluation_does_not_apply_credit_without_confirmed_pass(agent_modu
 
     assert result["food_credit"] == "$0.00"
     assert result["amount_due"] == "$10.00"
+
+
+def test_set_zoo_id_stores_only_a_valid_confirmed_location(agent_module):
+    context = SimpleNamespace(state={})
+
+    result = agent_module.set_zoo_id(context, "Chicago")
+
+    assert result == {"status": "success", "zoo_id": "chicago"}
+    assert context.state["ZOO_ID"] == "chicago"
+
+
+def test_set_zoo_id_rejects_an_unknown_location(agent_module):
+    context = SimpleNamespace(state={})
+
+    result = agent_module.set_zoo_id(context, "unknown")
+
+    assert result["status"] == "error"
+    assert "ZOO_ID" not in context.state
