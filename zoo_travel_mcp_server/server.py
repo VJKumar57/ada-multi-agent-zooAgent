@@ -1,0 +1,288 @@
+import json
+import os
+from typing import Any
+from urllib.error import URLError
+from urllib.parse import quote, urlencode
+from urllib.request import Request, urlopen
+
+from mcp.server.fastmcp import FastMCP
+
+
+travel_mcp = FastMCP(
+    "Zoo Travel Conditions",
+    host="0.0.0.0",
+    port=int(os.getenv("PORT", "8080")),
+)
+
+UPSTREAM_TIMEOUT_SECONDS = float(os.getenv("UPSTREAM_TIMEOUT_SECONDS", "10"))
+NOMINATIM_USER_AGENT = os.getenv(
+    "NOMINATIM_USER_AGENT", "zoo-tour-guide-demo/1.0 (contact: example@example.com)"
+)
+OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+OSRM_URL = "https://router.project-osrm.org/route/v1/driving"
+
+DEFAULT_ZOO_LOCATIONS = [
+    {
+        "id": "chicago",
+        "name": "Chicago Zoo Demo",
+        "address": "Chicago, Illinois (demonstration location)",
+        "latitude": 41.9210,
+        "longitude": -87.6335,
+    },
+    {
+        "id": "san_diego",
+        "name": "San Diego Zoo Demo",
+        "address": "San Diego, California (demonstration location)",
+        "latitude": 32.7353,
+        "longitude": -117.1490,
+    },
+    {
+        "id": "bronx",
+        "name": "Bronx Zoo Demo",
+        "address": "Bronx, New York (demonstration location)",
+        "latitude": 40.8506,
+        "longitude": -73.8769,
+    },
+    {
+        "id": "washington_dc",
+        "name": "Washington, DC Zoo Demo",
+        "address": "Washington, DC (demonstration location)",
+        "latitude": 38.9296,
+        "longitude": -77.0498,
+    },
+]
+
+
+def load_zoo_locations() -> dict[str, dict[str, Any]]:
+    """Load validated location data from server-side configuration."""
+    configured_locations = os.getenv("ZOO_LOCATIONS_JSON")
+    locations = (
+        json.loads(configured_locations)
+        if configured_locations
+        else DEFAULT_ZOO_LOCATIONS
+    )
+    if not isinstance(locations, list):
+        raise ValueError("ZOO_LOCATIONS_JSON must be a JSON array.")
+
+    registry = {}
+    for location in locations:
+        required_fields = {"id", "name", "address", "latitude", "longitude"}
+        has_required_fields = (
+            isinstance(location, dict) and required_fields <= location.keys()
+        )
+        if not has_required_fields:
+            raise ValueError(
+                "Each zoo location must define id, name, address, latitude, "
+                "and longitude."
+            )
+        zoo_id = str(location["id"]).strip().lower()
+        if not zoo_id or zoo_id in registry:
+            raise ValueError("Zoo location ids must be unique and non-empty.")
+        registry[zoo_id] = {
+            "id": zoo_id,
+            "name": str(location["name"]),
+            "address": str(location["address"]),
+            "latitude": float(location["latitude"]),
+            "longitude": float(location["longitude"]),
+        }
+    return registry
+
+
+ZOO_LOCATIONS = load_zoo_locations()
+geocoding_cache: dict[str, dict[str, float | str]] = {}
+
+
+def fetch_json(url: str, headers: dict[str, str] | None = None) -> Any:
+    """Fetch JSON from an upstream provider with a bounded timeout."""
+    try:
+        request = Request(url, headers=headers or {})
+        with urlopen(request, timeout=UPSTREAM_TIMEOUT_SECONDS) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except (OSError, URLError, json.JSONDecodeError) as error:
+        raise RuntimeError("Travel conditions provider is unavailable.") from error
+
+
+def get_zoo(zoo_id: str) -> dict[str, Any] | None:
+    return ZOO_LOCATIONS.get(zoo_id.strip().lower())
+
+
+def zoo_error_response(zoo_id: str) -> dict[str, str]:
+    options = ", ".join(ZOO_LOCATIONS)
+    return {
+        "status": "error",
+        "error_message": f"Unknown zoo_id '{zoo_id}'. Choose one of: {options}.",
+    }
+
+
+def weather_request_url(zoo: dict[str, Any], current: bool) -> str:
+    parameters = {
+        "latitude": zoo["latitude"],
+        "longitude": zoo["longitude"],
+        "timezone": "auto",
+    }
+    if current:
+        parameters["current"] = (
+            "temperature_2m,apparent_temperature,precipitation,weather_code,"
+            "wind_speed_10m"
+        )
+    else:
+        parameters["daily"] = (
+            "weather_code,temperature_2m_max,temperature_2m_min,"
+            "precipitation_probability_max"
+        )
+    return f"{OPEN_METEO_URL}?{urlencode(parameters)}"
+
+
+def error_response(message: str) -> dict[str, str]:
+    return {"status": "error", "error_message": message}
+
+
+@travel_mcp.tool()
+def list_zoo_locations() -> dict[str, Any]:
+    """List available Zoo demonstration locations and their identifiers."""
+    return {
+        "status": "success",
+        "locations": list(ZOO_LOCATIONS.values()),
+        "note": "Locations are demonstration data; replace them before production use.",
+    }
+
+
+@travel_mcp.tool()
+def get_zoo_location(zoo_id: str) -> dict[str, Any]:
+    """Get a Zoo demonstration location by id, including its configured address."""
+    zoo = get_zoo(zoo_id)
+    if zoo is None:
+        return zoo_error_response(zoo_id)
+    return {
+        "status": "success",
+        "location": zoo,
+        "note": "This is a demonstration location, not an official Zoo address.",
+    }
+
+
+@travel_mcp.tool()
+def get_zoo_weather(zoo_id: str) -> dict[str, Any]:
+    """Get current weather conditions for a selected Zoo location."""
+    zoo = get_zoo(zoo_id)
+    if zoo is None:
+        return zoo_error_response(zoo_id)
+    try:
+        weather = fetch_json(weather_request_url(zoo, current=True))["current"]
+    except (KeyError, RuntimeError):
+        return error_response("Weather data is unavailable.")
+    return {
+        "status": "success",
+        "zoo": zoo,
+        "source": "Open-Meteo",
+        "observed_at": weather.get("time"),
+        "temperature_c": weather.get("temperature_2m"),
+        "apparent_temperature_c": weather.get("apparent_temperature"),
+        "precipitation_mm": weather.get("precipitation"),
+        "weather_code": weather.get("weather_code"),
+        "wind_speed_kmh": weather.get("wind_speed_10m"),
+    }
+
+
+@travel_mcp.tool()
+def get_weather_forecast(zoo_id: str, days: int = 3) -> dict[str, Any]:
+    """Get a one- to seven-day forecast for a selected Zoo location."""
+    zoo = get_zoo(zoo_id)
+    if zoo is None:
+        return zoo_error_response(zoo_id)
+    if not 1 <= days <= 7:
+        return error_response("Forecast days must be between 1 and 7.")
+    try:
+        daily = fetch_json(weather_request_url(zoo, current=False))["daily"]
+        forecast = [
+            {
+                "date": daily["time"][index],
+                "weather_code": daily["weather_code"][index],
+                "temperature_min_c": daily["temperature_2m_min"][index],
+                "temperature_max_c": daily["temperature_2m_max"][index],
+                "precipitation_probability_max": daily[
+                    "precipitation_probability_max"
+                ][index],
+            }
+            for index in range(days)
+        ]
+    except (IndexError, KeyError, RuntimeError):
+        return error_response("Forecast data is unavailable.")
+    return {
+        "status": "success",
+        "zoo": zoo,
+        "source": "Open-Meteo",
+        "forecast": forecast,
+    }
+
+
+def geocode_address(address: str) -> dict[str, float | str]:
+    """Geocode an origin address through Nominatim, caching successful lookups."""
+    normalized_address = address.strip()
+    if not normalized_address:
+        raise ValueError("An origin is required for route planning.")
+    cached_result = geocoding_cache.get(normalized_address.lower())
+    if cached_result is not None:
+        return cached_result
+    parameters = {"q": normalized_address, "format": "jsonv2", "limit": 1}
+    results = fetch_json(
+        f"{NOMINATIM_URL}?{urlencode(parameters)}",
+        headers={"User-Agent": NOMINATIM_USER_AGENT},
+    )
+    if not isinstance(results, list) or not results:
+        raise ValueError("The origin address could not be located.")
+    try:
+        coordinates = {
+            "latitude": float(results[0]["lat"]),
+            "longitude": float(results[0]["lon"]),
+            "display_name": str(results[0]["display_name"]),
+        }
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("The origin address could not be located.") from error
+    geocoding_cache[normalized_address.lower()] = coordinates
+    return coordinates
+
+
+def calculate_route(
+    origin: dict[str, float | str], zoo: dict[str, Any]
+) -> dict[str, float]:
+    """Calculate a traffic-free driving route through OSRM."""
+    coordinates = (
+        f"{origin['longitude']},{origin['latitude']};"
+        f"{zoo['longitude']},{zoo['latitude']}"
+    )
+    route_url = f"{OSRM_URL}/{quote(coordinates, safe=',;')}?overview=false"
+    response = fetch_json(route_url)
+    try:
+        route = response["routes"][0]
+        return {
+            "distance_km": round(float(route["distance"]) / 1000, 1),
+            "estimated_duration_minutes": round(float(route["duration"]) / 60),
+        }
+    except (IndexError, KeyError, TypeError, ValueError) as error:
+        raise RuntimeError("A driving route could not be calculated.") from error
+
+
+@travel_mcp.tool()
+def get_route_to_zoo(origin: str, zoo_id: str) -> dict[str, Any]:
+    """Get traffic-free driving distance and estimated duration to a selected Zoo."""
+    zoo = get_zoo(zoo_id)
+    if zoo is None:
+        return zoo_error_response(zoo_id)
+    try:
+        origin_location = geocode_address(origin)
+        route = calculate_route(origin_location, zoo)
+    except (RuntimeError, ValueError) as error:
+        return error_response(str(error))
+    return {
+        "status": "success",
+        "origin": origin_location,
+        "zoo": zoo,
+        "source": "OpenStreetMap Nominatim and OSRM",
+        "traffic_included": False,
+        **route,
+    }
+
+
+if __name__ == "__main__":
+    travel_mcp.run(transport="streamable-http")

@@ -22,6 +22,7 @@ google.cloud.logging.Client().setup_logging()
 
 model_name = os.environ["MODEL"]
 mcp_server_url = os.environ["MCP_SERVER_URL"]
+travel_mcp_server_url = os.environ["TRAVEL_MCP_SERVER_URL"]
 mcp_server_authenticated = os.getenv("MCP_SERVER_AUTHENTICATED", "FALSE").upper() == "TRUE"
 
 
@@ -246,9 +247,9 @@ def calculate_meal_order(
     }
 
 
-def get_id_token() -> str:
-    """Get a Cloud Run identity token for the Zoo MCP server."""
-    audience = mcp_server_url.rstrip("/").removesuffix("/mcp")
+def get_id_token(server_url: str) -> str:
+    """Get a Cloud Run identity token for an MCP server."""
+    audience = server_url.rstrip("/").removesuffix("/mcp")
     request = google.auth.transport.requests.Request()
     return google.oauth2.id_token.fetch_id_token(request, audience)
 
@@ -257,10 +258,18 @@ mcp_connection_params = StreamableHTTPConnectionParams(url=mcp_server_url)
 if mcp_server_authenticated:
     mcp_connection_params = StreamableHTTPConnectionParams(
         url=mcp_server_url,
-        headers={"Authorization": f"Bearer {get_id_token()}"},
+        headers={"Authorization": f"Bearer {get_id_token(mcp_server_url)}"},
     )
 
 mcp_tools = MCPToolset(connection_params=mcp_connection_params)
+travel_mcp_connection_params = StreamableHTTPConnectionParams(url=travel_mcp_server_url)
+if mcp_server_authenticated:
+    travel_mcp_connection_params = StreamableHTTPConnectionParams(
+        url=travel_mcp_server_url,
+        headers={"Authorization": f"Bearer {get_id_token(travel_mcp_server_url)}"},
+    )
+
+travel_mcp_tools = MCPToolset(connection_params=travel_mcp_connection_params)
 wikipedia_tool = LangchainTool(
     tool=WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper())
 )
@@ -344,13 +353,35 @@ are sample values and must be confirmed with Zoo Cafe staff.""",
     tools=[get_meal_options, calculate_meal_order],
 )
 
+travel_planner_agent = Agent(
+    name="travel_planner_agent",
+    model=model_name,
+    description="Answers Zoo location, route, weather, forecast, and climate questions.",
+    instruction="""You are the Zoo Travel Planner. Help visitors prepare for their trip
+to a Zoo location. When no location is named, first use list_zoo_locations and
+ask the visitor to choose Chicago, San Diego, Bronx, or Washington, DC. Always
+retrieve authoritative travel MCP data before answering location, address,
+weather, forecast, climate, route, direction, distance, or travel-time questions.
+Use get_zoo_location for address questions. For route questions, ask for the
+visitor's origin when it is absent, then call get_route_to_zoo with the chosen
+zoo id. Route duration is an estimate without live traffic. For general visit
+planning, retrieve current weather; retrieve the forecast when the visitor gives
+a future visit date. Clearly distinguish current observations from forecasts.
+If a tool returns an error, state the limitation plainly. Travel information and
+Zoo locations are demonstration data; visitors should confirm details before leaving.""",
+    tools=[travel_mcp_tools],
+)
+
 
 root_agent = Agent(
     name="greeter",
     model=model_name,
     description="The entry point for the Zoo Tour Guide.",
     instruction="""You are the Zoo Tour Guide entry point. Help visitors learn about
-animals, Zoo admission, and Zoo Cafe meals. For questions about food, meals,
+animals, Zoo admission, Zoo Cafe meals, and Zoo travel. For questions about
+locations, addresses, weather, climate, forecasts, routes, directions, distance,
+travel time, or driving,
+transfer control to travel_planner_agent. For questions about food, meals,
 orders, vegetarian or non-vegetarian options, dietary needs, calories, cafe
 items, or food credit, transfer control to meal_planner_agent. For questions
 about tickets, passes, prices, resident rates, family rates, or visiting hours,
@@ -358,5 +389,10 @@ transfer control to ticket_information_agent.
 For animal questions, use add_prompt_to_state to save the user's response, then
 transfer control to tour_guide_workflow.""",
     tools=[add_prompt_to_state],
-    sub_agents=[tour_guide_workflow, ticket_information_agent, meal_planner_agent],
+    sub_agents=[
+        tour_guide_workflow,
+        ticket_information_agent,
+        meal_planner_agent,
+        travel_planner_agent,
+    ],
 )
