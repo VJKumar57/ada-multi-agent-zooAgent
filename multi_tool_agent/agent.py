@@ -6,6 +6,7 @@ import google.auth
 import google.auth.transport.requests
 import google.cloud.logging
 import google.oauth2.id_token
+import httpx
 from dotenv import load_dotenv
 from google.adk.agents import Agent, SequentialAgent
 from google.adk.tools.langchain_tool import LangchainTool
@@ -304,11 +305,31 @@ def get_id_token(server_url: str) -> str:
     return google.oauth2.id_token.fetch_id_token(request, audience)
 
 
+def authenticated_mcp_client_factory(server_url: str):
+    """Create MCP HTTP clients with a fresh Cloud Run token per connection."""
+
+    def factory(
+        headers: dict[str, str] | None = None,
+        timeout: httpx.Timeout | None = None,
+        auth: httpx.Auth | None = None,
+    ) -> httpx.AsyncClient:
+        request_headers = dict(headers or {})
+        request_headers["Authorization"] = f"Bearer {get_id_token(server_url)}"
+        return httpx.AsyncClient(
+            headers=request_headers,
+            timeout=timeout,
+            auth=auth,
+            follow_redirects=True,
+        )
+
+    return factory
+
+
 mcp_connection_params = StreamableHTTPConnectionParams(url=mcp_server_url)
 if mcp_server_authenticated:
     mcp_connection_params = StreamableHTTPConnectionParams(
         url=mcp_server_url,
-        headers={"Authorization": f"Bearer {get_id_token(mcp_server_url)}"},
+        httpx_client_factory=authenticated_mcp_client_factory(mcp_server_url),
     )
 
 mcp_tools = MCPToolset(connection_params=mcp_connection_params)
@@ -316,7 +337,9 @@ travel_mcp_connection_params = StreamableHTTPConnectionParams(url=travel_mcp_ser
 if mcp_server_authenticated:
     travel_mcp_connection_params = StreamableHTTPConnectionParams(
         url=travel_mcp_server_url,
-        headers={"Authorization": f"Bearer {get_id_token(travel_mcp_server_url)}"},
+        httpx_client_factory=authenticated_mcp_client_factory(
+            travel_mcp_server_url
+        ),
     )
 
 travel_mcp_tools = MCPToolset(connection_params=travel_mcp_connection_params)
@@ -326,7 +349,9 @@ knowledge_mcp_connection_params = StreamableHTTPConnectionParams(
 if mcp_server_authenticated:
     knowledge_mcp_connection_params = StreamableHTTPConnectionParams(
         url=knowledge_mcp_server_url,
-        headers={"Authorization": f"Bearer {get_id_token(knowledge_mcp_server_url)}"},
+        httpx_client_factory=authenticated_mcp_client_factory(
+            knowledge_mcp_server_url
+        ),
     )
 
 knowledge_mcp_tools = MCPToolset(connection_params=knowledge_mcp_connection_params)
