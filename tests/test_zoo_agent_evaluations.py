@@ -101,3 +101,15 @@ def test_get_shared_location_uses_only_server_owned_state(agent_module):
         "latitude": 40.1,
         "longitude": -83.2,
     }
+
+
+def test_get_shared_location_accepts_serialized_session_coordinates(agent_module):
+    context = SimpleNamespace(
+        state={"USER_LOCATION_LATITUDE": "40.1", "USER_LOCATION_LONGITUDE": "-83.2"}
+    )
+
+    assert agent_module.get_shared_location(context) == {
+        "status": "success",
+        "latitude": 40.1,
+        "longitude": -83.2,
+    }
