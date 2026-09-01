@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import date
 from typing import Any
 from urllib.error import URLError
 from urllib.parse import quote, urlencode
@@ -138,6 +139,29 @@ def error_response(message: str) -> dict[str, str]:
     return {"status": "error", "error_message": message}
 
 
+def server_date() -> date:
+    """Return the current date according to the travel service server."""
+    return date.today()
+
+
+def parse_visit_date(visit_date: str) -> date:
+    """Validate a forecast date within the provider's seven-day window."""
+    try:
+        requested_date = date.fromisoformat(visit_date)
+    except ValueError as error:
+        raise ValueError("visit_date must use ISO format: YYYY-MM-DD.") from error
+    days_ahead = (requested_date - server_date()).days
+    if not 0 <= days_ahead <= 6:
+        raise ValueError("visit_date must be between today and six days from today.")
+    return requested_date
+
+
+@travel_mcp.tool()
+def get_server_date() -> dict[str, str]:
+    """Get the current server date used to resolve relative visit dates."""
+    return {"status": "success", "date": server_date().isoformat()}
+
+
 @travel_mcp.tool()
 def list_zoo_locations() -> dict[str, Any]:
     """List available Zoo demonstration locations and their identifiers."""
@@ -185,16 +209,22 @@ def get_zoo_weather(zoo_id: str) -> dict[str, Any]:
 
 
 @travel_mcp.tool()
-def get_weather_forecast(zoo_id: str, days: int = 3) -> dict[str, Any]:
-    """Get a one- to seven-day forecast for a selected Zoo location."""
+def get_weather_forecast(
+    zoo_id: str, visit_date: str | None = None, days: int = 3
+) -> dict[str, Any]:
+    """Get a selected-date or one- to seven-day forecast for a Zoo location."""
     zoo = get_zoo(zoo_id)
     if zoo is None:
         return zoo_error_response(zoo_id)
-    if not 1 <= days <= 7:
+    try:
+        requested_date = parse_visit_date(visit_date) if visit_date else None
+    except ValueError as error:
+        return error_response(str(error))
+    if visit_date is None and not 1 <= days <= 7:
         return error_response("Forecast days must be between 1 and 7.")
     try:
         daily = fetch_json(weather_request_url(zoo, current=False))["daily"]
-        forecast = [
+        forecast_entries = [
             {
                 "date": daily["time"][index],
                 "weather_code": daily["weather_code"][index],
@@ -204,15 +234,25 @@ def get_weather_forecast(zoo_id: str, days: int = 3) -> dict[str, Any]:
                     "precipitation_probability_max"
                 ][index],
             }
-            for index in range(days)
+            for index in range(len(daily["time"]))
         ]
     except (IndexError, KeyError, RuntimeError):
         return error_response("Forecast data is unavailable.")
+    if requested_date:
+        forecast_entries = [
+            entry
+            for entry in forecast_entries
+            if entry["date"] == requested_date.isoformat()
+        ]
+        if not forecast_entries:
+            return error_response("Forecast data is unavailable for visit_date.")
+    else:
+        forecast_entries = forecast_entries[:days]
     return {
         "status": "success",
         "zoo": zoo,
         "source": "Open-Meteo",
-        "forecast": forecast,
+        "forecast": forecast_entries,
     }
 
 

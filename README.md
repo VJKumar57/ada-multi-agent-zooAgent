@@ -88,7 +88,7 @@ Zoo Cafe prices, calorie counts, and food-credit rules are sample data for this 
 | Internal data connection | Model Context Protocol (MCP), Streamable HTTP |
 | MCP client | `MCPToolset` and `StreamableHTTPConnectionParams` |
 | Zoo tools | `find_animals(query)`, `list_animals()` |
-| Zoo travel tools | `list_zoo_locations()`, `get_zoo_location(zoo_id)`, `get_zoo_weather(zoo_id)`, `get_weather_forecast(zoo_id, days)`, `get_route_to_zoo(origin, zoo_id)` |
+| Zoo travel tools | `get_server_date()`, `list_zoo_locations()`, `get_zoo_location(zoo_id)`, `get_zoo_weather(zoo_id)`, `get_weather_forecast(zoo_id, visit_date, days)`, `get_route_to_zoo(origin, zoo_id)` |
 | General knowledge tool | LangChain `WikipediaQueryRun` |
 | Chat UI | Flask, vanilla HTML/CSS/JavaScript |
 | Hosting | Google Cloud Run source deployment |
