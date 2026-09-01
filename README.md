@@ -9,6 +9,7 @@ A multi-agent Zoo Tour Guide deployed on Google Cloud Run. It answers questions 
 | Zoo Tour Guide UI | Configured deployment region | Obtain with `gcloud run services describe` | Browser chat interface |
 | ADK agent API | Configured deployment region | Obtain with `gcloud run services describe` | Agent runtime and REST API |
 | Zoo MCP server | Configured deployment region | Obtain with `gcloud run services describe` | Internal zoo data tools |
+| Zoo Travel MCP server | Configured deployment region | Obtain with `gcloud run services describe` | Internal location, weather, forecast, and route tools |
 
 ## Architecture
 
@@ -20,11 +21,14 @@ flowchart LR
     Greeter --> Research[Comprehensive researcher]
     Greeter --> Tickets[Ticket information agent]
     Greeter --> Meals[Meal planner agent]
+    Greeter --> Travel[Travel planner agent]
     Research --> MCP[Zoo MCP server<br/>Streamable HTTP]
+    Travel --> TravelMCP[Zoo Travel MCP server<br/>Streamable HTTP]
     Research --> Wiki[Wikipedia]
     Research --> Format[Response formatter]
     Format --> UI
     MCP --> ZooData[Zoo Animal Directory]
+    TravelMCP --> Weather[Open-Meteo]
     API --> Vertex[Vertex AI Gemini]
 ```
 
@@ -53,6 +57,9 @@ Ticket information agent
       |
       v
     Meal planner agent
+      |
+      v
+    Travel planner agent ---> Zoo Travel MCP server (Streamable HTTP) ---> Open-Meteo
 ```
 
 ## Agent Workflow
@@ -68,6 +75,7 @@ Sibling specialists of `tour_guide_workflow` are:
 
 1. `ticket_information_agent`: retrieves the current sample Zoo rates for day, night, half-day, half-night, weekly, monthly, yearly, individual, family, resident, and non-resident passes.
 2. `meal_planner_agent`: recommends dietary-aware Zoo Cafe selections, calculates order prices and calories, and applies the $20 food credit included with an eligible full-day pass.
+3. `travel_planner_agent`: helps visitors choose one of four demonstration Zoo locations, retrieves weather and forecasts, provides configured location details, and calculates traffic-free driving distance and estimated duration after it receives an origin.
 
 Zoo Cafe prices, calorie counts, and food-credit rules are sample data for this demonstration. Replace them with an approved cafe catalog before production use.
 
@@ -80,6 +88,7 @@ Zoo Cafe prices, calorie counts, and food-credit rules are sample data for this 
 | Internal data connection | Model Context Protocol (MCP), Streamable HTTP |
 | MCP client | `MCPToolset` and `StreamableHTTPConnectionParams` |
 | Zoo tools | `find_animals(query)`, `list_animals()` |
+| Zoo travel tools | `get_server_date()`, `list_zoo_locations()`, `get_zoo_location(zoo_id)`, `get_zoo_weather(zoo_id)`, `get_weather_forecast(zoo_id, visit_date, days)`, `get_route_to_zoo(origin, zoo_id)` |
 | General knowledge tool | LangChain `WikipediaQueryRun` |
 | Chat UI | Flask, vanilla HTML/CSS/JavaScript |
 | Hosting | Google Cloud Run source deployment |
@@ -98,6 +107,10 @@ The sample Zoo Animal Directory contains Asha (Asian elephant), Milo (African el
 │   ├── server.py
 │   ├── requirements.txt
 │   └── Procfile
+├── zoo_travel_mcp_server/  # Zoo travel conditions MCP service
+│   ├── server.py
+│   ├── requirements.txt
+│   └── Procfile
 ├── zoo_chat_ui/            # Browser chat service
 │   ├── app.py
 │   ├── templates/index.html
@@ -105,6 +118,11 @@ The sample Zoo Animal Directory contains Asha (Asian elephant), Milo (African el
 │   └── Procfile
 └── requirements.txt         # ADK agent dependencies
 ```
+
+## Roadmap
+
+The planned delivery sequence is in [ROADMAP.md](ROADMAP.md). The current focus
+is evaluation and observability before adding managed Zoo data or retrieval.
 
 ## Prerequisites
 
@@ -146,12 +164,50 @@ GOOGLE_CLOUD_PROJECT=PROJECT_ID
 GOOGLE_CLOUD_LOCATION=us-central1
 MODEL=gemini-2.5-flash
 MCP_SERVER_URL=https://zoo-mcp-server-PROJECT_NUMBER.us-west1.run.app/mcp
+TRAVEL_MCP_SERVER_URL=https://zoo-travel-mcp-server-PROJECT_NUMBER.us-west1.run.app/mcp
 MCP_SERVER_AUTHENTICATED=FALSE
+UPSTREAM_TIMEOUT_SECONDS=10
+NOMINATIM_USER_AGENT=zoo-tour-guide-demo/1.0 (contact: YOUR_CONTACT_EMAIL)
+CACHE_REDIS_URL=redis://REDIS_HOST:6379/0
+CACHE_KEY_PREFIX=zoo-tour-guide:v1
+TRAVEL_CACHE_MAX_ENTRIES=200
 ```
 
 Use `MCP_SERVER_AUTHENTICATED=TRUE` for a protected Cloud Run MCP service; the agent obtains and sends a Google identity token. The browser UI also obtains an identity token before calling the private ADK agent API.
 
+The travel MCP server uses Open-Meteo for weather and forecasts, Nominatim for origin geocoding, and OSRM for traffic-free driving distance and duration estimates. These public services require no API key, but Nominatim requests must identify the deployment with `NOMINATIM_USER_AGENT` and must be kept within its usage policy. The default Chicago, San Diego, Bronx, and Washington, DC locations are demonstration data. Replace them with approved locations by setting `ZOO_LOCATIONS_JSON` to a JSON array whose entries provide `id`, `name`, `address`, `latitude`, and `longitude`.
+
 Cloud Run does not upload nested `.env` files by default. Pass these values with `--set-env-vars` during deployment.
+
+### Cache Configuration
+
+The UI uses `CACHE_REDIS_URL` when configured to cache an exact repeated, eligible
+question for the same authenticated Firebase user and ADK session. A cache hit
+returns the saved final answer and sanitized Activity list without invoking the
+ADK API or Gemini again. Cached entries expire after 30 minutes. Cache keys contain
+only a version prefix, user/session identifiers, and a SHA-256 hash of normalized
+question text; cached values contain only the final answer and sanitized agent/tool
+names. Firebase tokens, Cloud Run identity tokens, raw ADK events, tool arguments,
+tool results, and role state are never cached.
+
+Dynamic and role-dependent requests bypass this answer cache, including weather,
+forecasts, routes, opening hours, dates, tickets, passes, Cafe orders, credits, and
+discounts. Redis connection, read, and write failures fail open: the UI continues
+to call the agent normally.
+
+For a Cloud Run deployment with more than one UI instance, use a private
+Redis-compatible service such as Memorystore and connect it through the service's
+VPC connector. Set `CACHE_REDIS_URL` only on the UI service. Bump
+`CACHE_KEY_PREFIX` (for example, to `zoo-tour-guide:v2`) to invalidate all saved
+answers after changing response behavior. Without `CACHE_REDIS_URL`, exact-answer
+caching is disabled.
+
+The Travel MCP service has bounded, in-memory TTL caches to reduce provider calls:
+geocoding results last 14 days, current weather 15 minutes, forecasts 6 hours, and
+traffic-free OSRM routes 1 hour. `TRAVEL_CACHE_MAX_ENTRIES` defaults to 200 entries
+per cache. These provider caches are per Cloud Run instance and are cleared by a
+restart or scale-out; a future shared Redis adapter can be added when cross-instance
+provider-cache reuse becomes necessary.
 
 ### Firebase Authentication and Personas
 
@@ -190,6 +246,7 @@ PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(project
 AGENT_REGION="us-central1"
 MCP_REGION="us-west1"
 MCP_URL="https://zoo-mcp-server-${PROJECT_NUMBER}.${MCP_REGION}.run.app/mcp"
+TRAVEL_MCP_URL="https://zoo-travel-mcp-server-${PROJECT_NUMBER}.${MCP_REGION}.run.app/mcp"
 ```
 
 ### 1. Deploy the Zoo MCP Server
@@ -204,7 +261,20 @@ gcloud run deploy zoo-mcp-server \
   --timeout 120
 ```
 
-### 2. Deploy the ADK Agent API
+### 2. Deploy the Zoo Travel MCP Server
+
+```bash
+gcloud run deploy zoo-travel-mcp-server \
+  --source zoo_travel_mcp_server \
+  --project "$PROJECT_ID" \
+  --region "$MCP_REGION" \
+  --max-instances 2 \
+  --concurrency 10 \
+  --timeout 120 \
+  --set-env-vars "UPSTREAM_TIMEOUT_SECONDS=10,NOMINATIM_USER_AGENT=zoo-tour-guide-demo/1.0 (contact: YOUR_CONTACT_EMAIL)"
+```
+
+### 3. Deploy the ADK Agent API
 
 ```bash
 gcloud run deploy weather-agent \
@@ -214,7 +284,7 @@ gcloud run deploy weather-agent \
   --max-instances 2 \
   --concurrency 10 \
   --timeout 120 \
-  --set-env-vars "GOOGLE_GENAI_USE_VERTEXAI=TRUE,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=${AGENT_REGION},MODEL=gemini-2.5-flash,MCP_SERVER_URL=${MCP_URL},MCP_SERVER_AUTHENTICATED=TRUE"
+  --set-env-vars "GOOGLE_GENAI_USE_VERTEXAI=TRUE,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=${AGENT_REGION},MODEL=gemini-2.5-flash,MCP_SERVER_URL=${MCP_URL},TRAVEL_MCP_SERVER_URL=${TRAVEL_MCP_URL},MCP_SERVER_AUTHENTICATED=TRUE"
 ```
 
 Capture its URL:
@@ -223,7 +293,7 @@ Capture its URL:
 AGENT_URL="$(gcloud run services describe weather-agent --project "$PROJECT_ID" --region "$AGENT_REGION" --format='value(status.url)')"
 ```
 
-### 3. Deploy the Browser Chat UI
+### 4. Deploy the Browser Chat UI
 
 ```bash
 gcloud run deploy zoo-tour-guide-ui \
@@ -264,6 +334,20 @@ Plan a vegetarian meal below 1000 calories: a garden salad, paneer tikka, fruit 
 ```
 
 The Meal Planner should calculate the calorie total and order subtotal, then apply the $20 full-day-pass food credit when eligible.
+
+Ask about current conditions:
+
+```text
+What is the weather at the zoo today?
+```
+
+Ask for travel help:
+
+```text
+How far is it from Union Station to the Chicago Zoo Demo?
+```
+
+The Travel Planner should ask the visitor to select a Zoo location or provide an origin when either is missing. It should return a traffic-free OSRM distance and estimated driving duration, and identify the Zoo location as demonstration data.
 
 To validate role pricing, assign an account the `employee` or `member` custom claim, sign out and back in to refresh its Firebase ID token, then ask for ticket pricing or a Cafe order total. The response should identify the 10% employee or 5% member discount.
 
@@ -317,7 +401,7 @@ curl -sS -X POST "$MCP_URL" \
 
 ## Security Notes
 
-The ADK agent API and Zoo MCP service require Cloud Run IAM authentication. The UI runtime service account needs `roles/run.invoker` on the agent API, and the agent runtime service account needs `roles/run.invoker` on the MCP service. The browser UI is public only so Firebase can present the sign-in experience; Flask rejects unauthenticated API requests after Firebase token verification.
+The ADK agent API and both MCP services require Cloud Run IAM authentication. The UI runtime service account needs `roles/run.invoker` on the agent API, and the agent runtime service account needs `roles/run.invoker` on both MCP services. The browser UI is public only so Firebase can present the sign-in experience; Flask rejects unauthenticated API requests after Firebase token verification.
 
 For a publicly shared deployment, use Identity-Aware Proxy or an application authentication layer, persistent distributed rate limiting, and a dedicated service account for each service. The included UI applies a per-instance request limit, a 4 KB request-body limit, a 1,000-character message limit, and upstream timeouts; it is a baseline, not a substitute for edge rate limiting.
 

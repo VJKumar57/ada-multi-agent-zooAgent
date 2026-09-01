@@ -7,16 +7,20 @@
   <style>
     :root { --ink: #17211d; --moss: #2f6a48; --leaf: #dcebdc; --sand: #f6f1e6; --coral: #d66b4e; --line: #c5cec2; }
     * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; background: radial-gradient(circle at top left, #e8f0de 0, transparent 35%), var(--sand); color: var(--ink); font-family: Georgia, serif; }
-    main { width: min(760px, calc(100% - 32px)); margin: 0 auto; padding: 48px 0 24px; }
+    body { margin: 0; min-height: 100vh; background: #fff; color: var(--ink); font-family: Georgia, serif; }
+    main { width: min(1080px, calc(100% - 32px)); margin: 0 auto; padding: 48px 0 24px; }
     header { border-bottom: 3px solid var(--moss); padding-bottom: 20px; }
     h1 { margin: 0; font-size: 2.4rem; font-weight: 700; letter-spacing: 0; }
     header p { margin: 8px 0 0; color: #496254; font-family: "Trebuchet MS", sans-serif; }
-    #chat-app { display: none; }
-    #messages { min-height: 55vh; padding: 24px 0; display: grid; align-content: start; gap: 14px; }
+    #chat-app { display: none; grid-template-columns: minmax(0, 1fr) 256px; column-gap: 32px; }
+    #chat-app header, .account-bar { grid-column: 1 / -1; }
+    #messages { grid-column: 1; min-height: 55vh; padding: 24px 0; display: grid; align-content: start; gap: 14px; }
     .message { max-width: 82%; padding: 14px 16px; border-radius: 7px; white-space: pre-wrap; line-height: 1.45; font-family: "Trebuchet MS", sans-serif; }
     .guide { background: var(--leaf); border-left: 4px solid var(--moss); }
     .user { background: var(--coral); color: white; justify-self: end; }
+    .thinking { display: inline-flex; align-items: center; gap: 10px; }
+    .spinner { width: 18px; height: 18px; border: 3px solid #9cbea5; border-top-color: var(--moss); border-radius: 50%; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
     #auth { width: min(440px, 100%); margin: 8vh auto 0; padding: 32px; background: #fffdf8; border: 1px solid var(--line); border-top: 5px solid var(--moss); border-radius: 8px; box-shadow: 0 18px 40px rgba(23, 33, 29, .12); font-family: "Trebuchet MS", sans-serif; }
     .auth-brand { color: var(--moss); font: 700 .8rem "Trebuchet MS", sans-serif; letter-spacing: .08em; text-transform: uppercase; }
     #auth h1 { margin: 10px 0 8px; font-size: 2.1rem; }
@@ -30,11 +34,18 @@
     #auth-status { min-height: 1.3em; margin: 16px 0 0; color: #496254; font-size: .9rem; }
     .account-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; color: #496254; font: .9rem "Trebuchet MS", sans-serif; }
     #sign-out { display: none; min-height: 34px; padding: 0 12px; background: transparent; border: 1px solid #718177; color: var(--ink); }
-    form { display: grid; grid-template-columns: 1fr auto; gap: 10px; border-top: 1px solid #cfcbbe; padding-top: 18px; }
+    form { grid-column: 1; display: grid; grid-template-columns: 1fr auto; gap: 10px; border-top: 1px solid #cfcbbe; padding-top: 18px; }
     input { min-width: 0; border: 1px solid #8b998c; border-radius: 5px; padding: 14px; font: 1rem "Trebuchet MS", sans-serif; }
     button { border: 0; border-radius: 5px; background: var(--moss); color: white; cursor: pointer; padding: 0 18px; font: 700 1rem "Trebuchet MS", sans-serif; }
     button:disabled { opacity: .6; cursor: wait; }
-    @media (max-width: 560px) { main { padding-top: 28px; } h1, #auth h1 { font-size: 2rem; } #auth { padding: 24px; margin-top: 4vh; } form { grid-template-columns: 1fr; } button { min-height: 48px; } .message { max-width: 92%; } }
+    .execution-panel { grid-column: 2; grid-row: 3 / span 2; align-self: start; position: sticky; top: 24px; margin-top: 24px; border-top: 3px solid var(--coral); padding-top: 12px; font-family: "Trebuchet MS", sans-serif; }
+    .execution-panel h2 { margin: 0; font-size: 1rem; }
+    #execution { display: grid; gap: 8px; margin-top: 14px; }
+    .execution-empty { color: #617066; font-size: .9rem; line-height: 1.4; }
+    .execution-step { display: flex; align-items: baseline; gap: 8px; border-bottom: 1px solid var(--line); padding: 0 0 8px; font-size: .9rem; }
+    .execution-type { min-width: 42px; color: #496254; font-size: .7rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    .execution-name { overflow-wrap: anywhere; }
+    @media (max-width: 760px) { main { padding-top: 28px; } #chat-app { grid-template-columns: 1fr; } #chat-app header, .account-bar, #messages, form, .execution-panel { grid-column: 1; } .execution-panel { grid-row: auto; position: static; margin-top: 28px; } h1, #auth h1 { font-size: 2rem; } #auth { padding: 24px; margin-top: 4vh; } form { grid-template-columns: 1fr; } button { min-height: 48px; } .message { max-width: 92%; } }
   </style>
 </head>
 <body>
@@ -43,7 +54,7 @@
     <section id="auth" aria-label="Sign in">
       <div class="auth-brand">Zoo Tour Guide</div>
       <h1>Plan your visit.</h1>
-      <p>Sign in to ask about animals, tickets, and Zoo Cafe meals.</p>
+      <p>Sign in to plan visits, routes, animals, tickets, and Zoo Cafe meals.</p>
       <h2>Sign in to continue</h2>
       <div class="auth-fields">
         <input id="email" type="email" autocomplete="email" placeholder="Email address" aria-label="Email address">
@@ -64,10 +75,14 @@
     <section id="auth"><p>Authentication has not been configured for this deployment.</p></section>
     {% endif %}
     <section id="chat-app" aria-label="Zoo Tour Guide chat">
-      <header><h1>Zoo Tour Guide</h1><p>Ask about animals, tickets, passes, and Zoo Cafe meals.</p></header>
+      <header><h1>Zoo Tour Guide</h1><p>Ask about four Zoo locations, routes, animals, tickets, passes, and Zoo Cafe meals.</p></header>
       <div class="account-bar"><span id="account-name"></span><button id="sign-out" type="button">Sign out</button></div>
-      <section id="messages" aria-live="polite"><div class="message guide">Hello. Which animal, Zoo pass, or meal would you like to learn about?</div></section>
-      <form id="chat-form"><input id="message" aria-label="Your question" autocomplete="off" placeholder="Ask about elephants, a family pass, or a 1,000-calorie meal..." maxlength="1000" required disabled><button id="send" type="submit" disabled>Send</button></form>
+      <section id="messages" aria-live="polite"><div class="message guide">Hello. Which Zoo location, route, animal, pass, or meal would you like to learn about?</div></section>
+      <form id="chat-form"><input id="message" aria-label="Your question" autocomplete="off" placeholder="Ask about a Chicago Zoo route, elephants, or a family pass..." maxlength="1000" required disabled><button id="send" type="submit" disabled>Send</button></form>
+      <aside class="execution-panel" aria-live="polite" aria-label="Request activity">
+        <h2>Activity</h2>
+        <div id="execution"><span class="execution-empty">Waiting for a request.</span></div>
+      </aside>
     </section>
   </main>
   {% if firebase_enabled %}
@@ -79,9 +94,45 @@
     const form = document.querySelector('#chat-form');
     const input = document.querySelector('#message');
     const button = document.querySelector('#send');
+    const execution = document.querySelector('#execution');
     let session;
     let currentUser;
     const add = (text, type) => { const item = document.createElement('div'); item.className = `message ${type}`; item.textContent = text; messages.append(item); item.scrollIntoView({ behavior: 'smooth', block: 'end' }); };
+    const addThinking = () => {
+      const item = document.createElement('div');
+      const spinner = document.createElement('span');
+      spinner.className = 'spinner';
+      spinner.setAttribute('aria-hidden', 'true');
+      item.className = 'message guide thinking';
+      item.setAttribute('role', 'status');
+      item.textContent = 'The guide is thinking';
+      item.prepend(spinner);
+      messages.append(item);
+      item.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      return item;
+    };
+    const renderExecution = steps => {
+      execution.replaceChildren();
+      if (!steps?.length) {
+        const empty = document.createElement('span');
+        empty.className = 'execution-empty';
+        empty.textContent = 'No agent or tool activity was reported.';
+        execution.append(empty);
+        return;
+      }
+      steps.forEach(step => {
+        const item = document.createElement('div');
+        const type = document.createElement('span');
+        const name = document.createElement('span');
+        item.className = 'execution-step';
+        type.className = 'execution-type';
+        name.className = 'execution-name';
+        type.textContent = step.type;
+        name.textContent = step.name;
+        item.append(type, name);
+        execution.append(item);
+      });
+    };
     const authenticatedFetch = async (url, options = {}) => {
       const token = await currentUser.getIdToken();
       const headers = new Headers(options.headers);
@@ -106,7 +157,7 @@
       session = undefined;
       input.disabled = button.disabled = !user;
       authPanel.style.display = user ? 'none' : 'block';
-      chatApp.style.display = user ? 'block' : 'none';
+      chatApp.style.display = user ? 'grid' : 'none';
       signOut.style.display = user ? 'inline-block' : 'none';
       accountName.textContent = user ? (user.email || 'Guest visitor') : '';
       status.textContent = user ? '' : 'Choose a sign-in method to begin.';
@@ -135,6 +186,8 @@
       const message = input.value.trim();
       if (!currentUser || !message) return;
       add(message, 'user'); input.value = ''; input.disabled = button.disabled = true;
+      renderExecution();
+      const thinking = addThinking();
       try {
         session ??= await createSession();
         const response = await authenticatedFetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: session.sessionId, message }) });
@@ -144,8 +197,11 @@
         catch { throw new Error('The chat service returned an invalid response. Please try again.'); }
         if (!response.ok) throw new Error(data.error || 'The guide could not answer right now.');
         add(data.answer, 'guide');
+        renderExecution(data.cached
+          ? [{ type: 'cache', name: 'Reused a previous response.' }, ...(data.execution || [])]
+          : data.execution);
       } catch (error) { add(error.message, 'guide'); }
-      finally { input.disabled = button.disabled = false; input.focus(); }
+      finally { thinking.remove(); input.disabled = button.disabled = false; input.focus(); }
     });
   </script>
 </body>
