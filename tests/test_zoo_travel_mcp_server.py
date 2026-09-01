@@ -256,6 +256,28 @@ def test_find_nearest_zoo_rejects_invalid_coordinates():
     }
 
 
+def test_find_nearest_zoo_from_origin_geocodes_once_and_compares_routes(monkeypatch):
+    distances = iter([300000, 2800000, 600000, 700000])
+    calls = []
+
+    def route_responses(url, headers=None):
+        calls.append(url)
+        if url.startswith(server.NOMINATIM_URL):
+            return [{"lat": "40", "lon": "-83", "display_name": "Origin"}]
+        return {"routes": [{"distance": next(distances), "duration": 3600}]}
+
+    monkeypatch.setattr(server, "fetch_json", route_responses)
+    server.geocoding_cache.clear()
+
+    result = server.find_nearest_zoo_from_origin("650 Melick Dr, Delaware, Ohio")
+
+    assert result["status"] == "success"
+    assert result["zoo"]["id"] == "chicago"
+    assert result["distance_km"] == 300.0
+    assert len(calls) == 5
+    assert sum(url.startswith(server.NOMINATIM_URL) for url in calls) == 1
+
+
 def test_find_nearest_zoo_reuses_cached_routes(monkeypatch):
     calls = []
 

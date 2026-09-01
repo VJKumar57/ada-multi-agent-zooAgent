@@ -260,7 +260,7 @@ def create_session():
         state["USER_LOCATION_LONGITUDE"] = location["longitude"]
     response = requests.post(
         f"{agent_url}/apps/{app_name}/users/{user_id}/sessions/{session_id}",
-        json={"state": state},
+        json=state,
         headers=agent_headers(),
         timeout=agent_request_timeout,
     )

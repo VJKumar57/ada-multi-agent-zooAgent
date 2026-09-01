@@ -6,6 +6,7 @@ import google.auth
 import google.auth.transport.requests
 import google.cloud.logging
 import google.oauth2.id_token
+import httpx
 from dotenv import load_dotenv
 from google.adk.agents import Agent, SequentialAgent
 from google.adk.tools.langchain_tool import LangchainTool
@@ -304,11 +305,31 @@ def get_id_token(server_url: str) -> str:
     return google.oauth2.id_token.fetch_id_token(request, audience)
 
 
+def authenticated_mcp_client_factory(server_url: str):
+    """Create MCP HTTP clients with a fresh Cloud Run token per connection."""
+
+    def factory(
+        headers: dict[str, str] | None = None,
+        timeout: httpx.Timeout | None = None,
+        auth: httpx.Auth | None = None,
+    ) -> httpx.AsyncClient:
+        request_headers = dict(headers or {})
+        request_headers["Authorization"] = f"Bearer {get_id_token(server_url)}"
+        return httpx.AsyncClient(
+            headers=request_headers,
+            timeout=timeout,
+            auth=auth,
+            follow_redirects=True,
+        )
+
+    return factory
+
+
 mcp_connection_params = StreamableHTTPConnectionParams(url=mcp_server_url)
 if mcp_server_authenticated:
     mcp_connection_params = StreamableHTTPConnectionParams(
         url=mcp_server_url,
-        headers={"Authorization": f"Bearer {get_id_token(mcp_server_url)}"},
+        httpx_client_factory=authenticated_mcp_client_factory(mcp_server_url),
     )
 
 mcp_tools = MCPToolset(connection_params=mcp_connection_params)
@@ -316,7 +337,9 @@ travel_mcp_connection_params = StreamableHTTPConnectionParams(url=travel_mcp_ser
 if mcp_server_authenticated:
     travel_mcp_connection_params = StreamableHTTPConnectionParams(
         url=travel_mcp_server_url,
-        headers={"Authorization": f"Bearer {get_id_token(travel_mcp_server_url)}"},
+        httpx_client_factory=authenticated_mcp_client_factory(
+            travel_mcp_server_url
+        ),
     )
 
 travel_mcp_tools = MCPToolset(connection_params=travel_mcp_connection_params)
@@ -326,7 +349,9 @@ knowledge_mcp_connection_params = StreamableHTTPConnectionParams(
 if mcp_server_authenticated:
     knowledge_mcp_connection_params = StreamableHTTPConnectionParams(
         url=knowledge_mcp_server_url,
-        headers={"Authorization": f"Bearer {get_id_token(knowledge_mcp_server_url)}"},
+        httpx_client_factory=authenticated_mcp_client_factory(
+            knowledge_mcp_server_url
+        ),
     )
 
 knowledge_mcp_tools = MCPToolset(connection_params=knowledge_mcp_connection_params)
@@ -429,9 +454,12 @@ call get_shared_location. If it succeeds, call find_nearest_zoo exactly once wit
 those coordinates; do not call list_zoo_locations or get_route_to_zoo for that
 request, and never reveal the coordinates. If no device location is available,
 ask the visitor to use the location control or provide a typed origin. After a
-successful nearest-Zoo result, call set_zoo_id with its returned zoo id. For all
-other requests with no location named, use list_zoo_locations and ask the visitor
-to choose Chicago, San Diego, Bronx, or Washington, DC. Always retrieve
+successful nearest-Zoo result, call set_zoo_id with its returned zoo id. When the
+visitor provides a typed origin for a nearest-Zoo request, call
+find_nearest_zoo_from_origin exactly once; do not call list_zoo_locations or
+get_route_to_zoo. For all other requests with no location named, use
+list_zoo_locations and ask the visitor to choose Chicago, San Diego, Bronx, or
+Washington, DC. Always retrieve
 authoritative travel MCP data before answering location, address, weather,
 forecast, climate, route, direction, distance, or travel-time questions. Use
 get_zoo_location for address questions. For route questions, ask for the
