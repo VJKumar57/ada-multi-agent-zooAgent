@@ -119,6 +119,11 @@ The sample Zoo Animal Directory contains Asha (Asian elephant), Milo (African el
 └── requirements.txt         # ADK agent dependencies
 ```
 
+## Roadmap
+
+The planned delivery sequence is in [ROADMAP.md](ROADMAP.md). The current focus
+is evaluation and observability before adding managed Zoo data or retrieval.
+
 ## Prerequisites
 
 - Google Cloud project with billing enabled

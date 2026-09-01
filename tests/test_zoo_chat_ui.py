@@ -1,4 +1,6 @@
 import os
+import json
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -187,3 +189,52 @@ def test_cache_failures_fall_through_to_the_agent(client, monkeypatch):
 
     assert response.get_json()["answer"] == "Agent answer"
     assert response.get_json()["cached"] is False
+
+
+def test_chat_observability_excludes_prompt_identity_and_token(
+    client, monkeypatch, caplog
+):
+    test_client, _ = client
+    caplog.set_level(logging.INFO, logger="zoo_chat_ui.app")
+    monkeypatch.setattr(
+        chat_app.requests,
+        "post",
+        lambda *args, **kwargs: SimpleNamespace(
+            status_code=200,
+            raise_for_status=lambda: None,
+            json=lambda: [
+                {
+                    "actions": {"transferToAgent": "travel_planner_agent"},
+                    "content": {
+                        "parts": [
+                            {
+                                "functionCall": {
+                                    "name": "get_zoo_weather",
+                                    "args": {"zoo_id": "chicago"},
+                                }
+                            },
+                            {"text": "Sunny"},
+                        ]
+                    },
+                }
+            ],
+        ),
+    )
+
+    test_client.post(
+        "/api/chat",
+        headers={"Authorization": "Bearer visitor-secret-token"},
+        json={"sessionId": "session-secret", "message": "Private prompt text"},
+    )
+
+    event = json.loads(caplog.records[-1].message)
+    assert event["event"] == "chat_request"
+    assert event["cache_status"] == "miss"
+    assert event["upstream_status"] == 200
+    assert event["activity"] == [
+        {"type": "agent", "name": "travel_planner_agent"},
+        {"type": "tool", "name": "get_zoo_weather"},
+    ]
+    assert "Private prompt text" not in caplog.text
+    assert "visitor-secret-token" not in caplog.text
+    assert "session-secret" not in caplog.text

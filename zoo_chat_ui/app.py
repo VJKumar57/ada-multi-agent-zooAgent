@@ -1,6 +1,7 @@
 import os
 import hashlib
 import json
+import logging
 import re
 import time
 import uuid
@@ -51,6 +52,7 @@ role_sensitive_message_pattern = re.compile(
     r"\b(ticket|pass|admission|price|pricing|cafe|meal|food|credit|discount)\b",
     re.IGNORECASE,
 )
+logger = logging.getLogger(__name__)
 
 if firebase_enabled and not firebase_admin._apps:
     firebase_admin.initialize_app(credentials.ApplicationDefault())
@@ -165,6 +167,28 @@ def store_cached_answer(
         pass
 
 
+def log_chat_request(
+    request_id: str,
+    cache_status: str,
+    latency_ms: int,
+    upstream_status: int | str,
+    execution: list[dict[str, str]] | None = None,
+) -> None:
+    """Emit Cloud Run-safe request metadata without prompts, identities, or tokens."""
+    logger.info(
+        json.dumps(
+            {
+                "event": "chat_request",
+                "request_id": request_id,
+                "cache_status": cache_status,
+                "latency_ms": latency_ms,
+                "upstream_status": upstream_status,
+                "activity": execution or [],
+            }
+        )
+    )
+
+
 def is_rate_limited() -> bool:
     """Limit each client IP to a bounded number of UI API calls per minute."""
     client_ip = request.headers.get("X-Forwarded-For", request.remote_addr).split(",")[0].strip()
@@ -226,6 +250,8 @@ def execution_trace(events: list[dict]) -> list[dict[str, str]]:
 @authenticated_user
 def chat():
     """Send a message to ADK and return the final text response."""
+    request_id = str(uuid.uuid4())
+    started_at = time.monotonic()
     if is_rate_limited():
         return jsonify({"error": "Too many requests. Please try again shortly."}), 429
 
@@ -239,9 +265,17 @@ def chat():
 
     user_id = f"firebase-{g.user['uid']}"
     cache_key = answer_cache_key(user_id, session_id, message)
-    if is_cacheable_message(message):
+    cacheable = is_cacheable_message(message)
+    if cacheable:
         cached = cached_answer(cache_key)
         if cached:
+            log_chat_request(
+                request_id,
+                "hit",
+                round((time.monotonic() - started_at) * 1000),
+                "not_called",
+                cached.get("execution"),
+            )
             return jsonify({**cached, "cached": True})
 
     try:
@@ -259,6 +293,12 @@ def chat():
         response.raise_for_status()
         events = response.json()
     except requests.RequestException as error:
+        log_chat_request(
+            request_id,
+            "bypassed" if not cacheable else "miss",
+            round((time.monotonic() - started_at) * 1000),
+            getattr(error.response, "status_code", "error"),
+        )
         return jsonify({"error": f"The agent request failed: {error}"}), 502
     final_text = next(
         (
@@ -270,8 +310,15 @@ def chat():
         "I could not produce a response.",
     )
     execution = execution_trace(events)
-    if is_cacheable_message(message):
+    if cacheable:
         store_cached_answer(cache_key, final_text, execution)
+    log_chat_request(
+        request_id,
+        "miss" if cacheable else "bypassed",
+        round((time.monotonic() - started_at) * 1000),
+        getattr(response, "status_code", 200),
+        execution,
+    )
     return jsonify({"answer": final_text, "execution": execution, "cached": False})
 
 
