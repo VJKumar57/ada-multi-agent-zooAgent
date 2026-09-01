@@ -3,6 +3,13 @@ from datetime import date
 from zoo_travel_mcp_server import server
 
 
+def setup_function():
+    server.geocoding_cache.clear()
+    server.weather_cache.clear()
+    server.forecast_cache.clear()
+    server.route_cache.clear()
+
+
 def test_list_zoo_locations_returns_four_demonstration_locations():
     locations = server.list_zoo_locations()
 
@@ -45,6 +52,38 @@ def test_get_zoo_weather_returns_conditions_for_selected_zoo(monkeypatch):
     assert conditions["temperature_c"] == 22.5
 
 
+def test_weather_cache_reuses_a_recent_provider_response(monkeypatch):
+    calls = []
+
+    def fetch(*args, **kwargs):
+        calls.append(args)
+        return {"current": {"time": "2026-08-31T10:00"}}
+
+    monkeypatch.setattr(server, "fetch_json", fetch)
+
+    server.get_zoo_weather("chicago")
+    server.get_zoo_weather("chicago")
+
+    assert len(calls) == 1
+
+
+def test_weather_cache_expires(monkeypatch):
+    clock = [100.0]
+    calls = []
+    monkeypatch.setattr(server.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        server,
+        "fetch_json",
+        lambda *args, **kwargs: calls.append(1) or {"current": {"time": "now"}},
+    )
+
+    server.get_zoo_weather("chicago")
+    clock[0] += server.WEATHER_CACHE_TTL_SECONDS
+    server.get_zoo_weather("chicago")
+
+    assert len(calls) == 2
+
+
 def test_get_weather_forecast_limits_results_to_requested_days(monkeypatch):
     monkeypatch.setattr(
         server,
@@ -65,6 +104,31 @@ def test_get_weather_forecast_limits_results_to_requested_days(monkeypatch):
     assert forecast["status"] == "success"
     assert forecast["zoo"]["id"] == "chicago"
     assert len(forecast["forecast"]) == 2
+
+
+def test_forecast_cache_filters_each_request_after_reuse(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        server,
+        "fetch_json",
+        lambda *args, **kwargs: calls.append(1)
+        or {
+            "daily": {
+                "time": ["2026-08-31", "2026-09-01"],
+                "weather_code": [1, 3],
+                "temperature_2m_min": [16, 14],
+                "temperature_2m_max": [25, 22],
+                "precipitation_probability_max": [10, 40],
+            }
+        },
+    )
+
+    first = server.get_weather_forecast("chicago", days=1)
+    second = server.get_weather_forecast("chicago", days=2)
+
+    assert len(calls) == 1
+    assert len(first["forecast"]) == 1
+    assert len(second["forecast"]) == 2
 
 
 def test_get_weather_forecast_returns_the_requested_visit_date(monkeypatch):
@@ -154,6 +218,23 @@ def test_get_route_to_zoo_returns_osrm_distance_and_duration(monkeypatch):
     assert route["distance_km"] == 123.4
     assert route["estimated_duration_minutes"] == 121
     assert route["traffic_included"] is False
+
+
+def test_route_cache_reuses_geocoding_and_osrm_results(monkeypatch):
+    calls = []
+
+    def route_responses(url, headers=None):
+        calls.append(url)
+        if url.startswith(server.NOMINATIM_URL):
+            return [{"lat": "39.5778", "lon": "-75.5123", "display_name": "Delaware"}]
+        return {"routes": [{"distance": 123400, "duration": 7260}]}
+
+    monkeypatch.setattr(server, "fetch_json", route_responses)
+
+    server.get_route_to_zoo("656 Melick Dr, Delaware", "chicago")
+    server.get_route_to_zoo("656 Melick Dr, Delaware", "chicago")
+
+    assert len(calls) == 2
 
 
 def test_get_route_to_zoo_reports_unknown_origin(monkeypatch):

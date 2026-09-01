@@ -1,5 +1,7 @@
 import json
 import os
+import time
+from collections import OrderedDict
 from datetime import date
 from typing import Any
 from urllib.error import URLError
@@ -91,7 +93,36 @@ def load_zoo_locations() -> dict[str, dict[str, Any]]:
 
 
 ZOO_LOCATIONS = load_zoo_locations()
-geocoding_cache: dict[str, dict[str, float | str]] = {}
+CACHE_MAX_ENTRIES = int(os.getenv("TRAVEL_CACHE_MAX_ENTRIES", "200"))
+GEOCODING_CACHE_TTL_SECONDS = 14 * 24 * 60 * 60
+WEATHER_CACHE_TTL_SECONDS = 15 * 60
+FORECAST_CACHE_TTL_SECONDS = 6 * 60 * 60
+ROUTE_CACHE_TTL_SECONDS = 60 * 60
+geocoding_cache: OrderedDict[str, tuple[float, dict[str, float | str]]] = OrderedDict()
+weather_cache: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
+forecast_cache: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
+route_cache: OrderedDict[str, tuple[float, dict[str, float]]] = OrderedDict()
+
+
+def cache_get(cache: OrderedDict, key: str) -> Any | None:
+    """Return an unexpired value and retain it as the most recently used entry."""
+    entry = cache.get(key)
+    if entry is None:
+        return None
+    expires_at, value = entry
+    if time.monotonic() >= expires_at:
+        del cache[key]
+        return None
+    cache.move_to_end(key)
+    return value
+
+
+def cache_set(cache: OrderedDict, key: str, value: Any, ttl_seconds: int) -> None:
+    """Store a successful provider response with bounded LRU eviction."""
+    cache[key] = (time.monotonic() + ttl_seconds, value)
+    cache.move_to_end(key)
+    while len(cache) > CACHE_MAX_ENTRIES:
+        cache.popitem(last=False)
 
 
 def fetch_json(url: str, headers: dict[str, str] | None = None) -> Any:
@@ -192,7 +223,15 @@ def get_zoo_weather(zoo_id: str) -> dict[str, Any]:
     if zoo is None:
         return zoo_error_response(zoo_id)
     try:
-        weather = fetch_json(weather_request_url(zoo, current=True))["current"]
+        weather = cache_get(weather_cache, zoo["id"])
+        if weather is None:
+            weather = fetch_json(weather_request_url(zoo, current=True))["current"]
+            cache_set(
+                weather_cache,
+                zoo["id"],
+                weather,
+                WEATHER_CACHE_TTL_SECONDS,
+            )
     except (KeyError, RuntimeError):
         return error_response("Weather data is unavailable.")
     return {
@@ -223,7 +262,10 @@ def get_weather_forecast(
     if visit_date is None and not 1 <= days <= 7:
         return error_response("Forecast days must be between 1 and 7.")
     try:
-        daily = fetch_json(weather_request_url(zoo, current=False))["daily"]
+        daily = cache_get(forecast_cache, zoo["id"])
+        if daily is None:
+            daily = fetch_json(weather_request_url(zoo, current=False))["daily"]
+            cache_set(forecast_cache, zoo["id"], daily, FORECAST_CACHE_TTL_SECONDS)
         forecast_entries = [
             {
                 "date": daily["time"][index],
@@ -261,7 +303,8 @@ def geocode_address(address: str) -> dict[str, float | str]:
     normalized_address = address.strip()
     if not normalized_address:
         raise ValueError("An origin is required for route planning.")
-    cached_result = geocoding_cache.get(normalized_address.lower())
+    cache_key = normalized_address.casefold()
+    cached_result = cache_get(geocoding_cache, cache_key)
     if cached_result is not None:
         return cached_result
     parameters = {"q": normalized_address, "format": "jsonv2", "limit": 1}
@@ -279,7 +322,7 @@ def geocode_address(address: str) -> dict[str, float | str]:
         }
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError("The origin address could not be located.") from error
-    geocoding_cache[normalized_address.lower()] = coordinates
+    cache_set(geocoding_cache, cache_key, coordinates, GEOCODING_CACHE_TTL_SECONDS)
     return coordinates
 
 
@@ -291,14 +334,24 @@ def calculate_route(
         f"{origin['longitude']},{origin['latitude']};"
         f"{zoo['longitude']},{zoo['latitude']}"
     )
+    cached_route = cache_get(route_cache, f"{coordinates}:{zoo['id']}")
+    if cached_route is not None:
+        return cached_route
     route_url = f"{OSRM_URL}/{quote(coordinates, safe=',;')}?overview=false"
     response = fetch_json(route_url)
     try:
         route = response["routes"][0]
-        return {
+        route = {
             "distance_km": round(float(route["distance"]) / 1000, 1),
             "estimated_duration_minutes": round(float(route["duration"]) / 60),
         }
+        cache_set(
+            route_cache,
+            f"{coordinates}:{zoo['id']}",
+            route,
+            ROUTE_CACHE_TTL_SECONDS,
+        )
+        return route
     except (IndexError, KeyError, TypeError, ValueError) as error:
         raise RuntimeError("A driving route could not be calculated.") from error
 

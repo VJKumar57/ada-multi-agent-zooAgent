@@ -196,7 +196,10 @@
         try { data = JSON.parse(body); }
         catch { throw new Error('The chat service returned an invalid response. Please try again.'); }
         if (!response.ok) throw new Error(data.error || 'The guide could not answer right now.');
-        add(data.answer, 'guide'); renderExecution(data.execution);
+        add(data.answer, 'guide');
+        renderExecution(data.cached
+          ? [{ type: 'cache', name: 'Reused a previous response.' }, ...(data.execution || [])]
+          : data.execution);
       } catch (error) { add(error.message, 'guide'); }
       finally { thinking.remove(); input.disabled = button.disabled = false; input.focus(); }
     });

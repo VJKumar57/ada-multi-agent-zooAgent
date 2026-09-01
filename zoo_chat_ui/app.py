@@ -1,4 +1,7 @@
 import os
+import hashlib
+import json
+import re
 import time
 import uuid
 from collections import defaultdict, deque
@@ -34,6 +37,20 @@ rate_limit_window_seconds = 60
 rate_limit_max_requests = 20
 request_timestamps: dict[str, deque[float]] = defaultdict(deque)
 rate_limit_lock = Lock()
+answer_cache_ttl_seconds = 30 * 60
+cache_redis_url = os.getenv("CACHE_REDIS_URL", "")
+cache_key_prefix = os.getenv("CACHE_KEY_PREFIX", "zoo-tour-guide:v1")
+cache_client = None
+cache_client_initialized = False
+time_sensitive_message_pattern = re.compile(
+    r"\b(now|today|tomorrow|monday|tuesday|wednesday|thursday|friday|"
+    r"saturday|sunday|weather|forecast|route|traffic|open|hours)\b",
+    re.IGNORECASE,
+)
+role_sensitive_message_pattern = re.compile(
+    r"\b(ticket|pass|admission|price|pricing|cafe|meal|food|credit|discount)\b",
+    re.IGNORECASE,
+)
 
 if firebase_enabled and not firebase_admin._apps:
     firebase_admin.initialize_app(credentials.ApplicationDefault())
@@ -81,6 +98,71 @@ def agent_headers() -> dict[str, str]:
     """Build authenticated headers for the private ADK Cloud Run service."""
     token = fetch_id_token(Request(), agent_url)
     return {"Authorization": f"Bearer {token}"}
+
+
+def normalized_message(message: str) -> str:
+    """Normalize an exact chat message before deriving a cache key."""
+    return " ".join(message.casefold().split())
+
+
+def answer_cache_key(user_id: str, session_id: str, message: str) -> str:
+    """Build an opaque key scoped to one authenticated user and ADK session."""
+    digest = hashlib.sha256(normalized_message(message).encode()).hexdigest()
+    return f"{cache_key_prefix}:answer:{user_id}:{session_id}:{digest}"
+
+
+def is_cacheable_message(message: str) -> bool:
+    """Exclude dynamic and role-dependent requests from answer caching."""
+    return not (
+        time_sensitive_message_pattern.search(message)
+        or role_sensitive_message_pattern.search(message)
+    )
+
+
+def get_cache_client():
+    """Create an optional Redis client lazily so cache failures never block chat."""
+    global cache_client, cache_client_initialized
+    if cache_client_initialized:
+        return cache_client
+    cache_client_initialized = True
+    if not cache_redis_url:
+        return None
+    try:
+        import redis
+
+        cache_client = redis.Redis.from_url(cache_redis_url, decode_responses=True)
+        cache_client.ping()
+    except Exception:
+        cache_client = None
+    return cache_client
+
+
+def cached_answer(cache_key: str) -> dict | None:
+    """Read a valid cached answer, treating cache failures as a miss."""
+    try:
+        value = get_cache_client().get(cache_key) if get_cache_client() else None
+        payload = json.loads(value) if value else None
+        if isinstance(payload, dict) and isinstance(payload.get("answer"), str):
+            return payload
+    except (Exception, json.JSONDecodeError):
+        pass
+    return None
+
+
+def store_cached_answer(
+    cache_key: str, answer: str, execution: list[dict[str, str]]
+) -> None:
+    """Store only the final answer and sanitized execution metadata."""
+    try:
+        client = get_cache_client()
+        if client:
+            client.setex(
+                cache_key,
+                answer_cache_ttl_seconds,
+                json.dumps({"answer": answer, "execution": execution}),
+            )
+    except Exception:
+        pass
 
 
 def is_rate_limited() -> bool:
@@ -155,12 +237,19 @@ def chat():
     if len(message) > 1_000:
         return jsonify({"error": "Messages must be 1,000 characters or fewer."}), 400
 
+    user_id = f"firebase-{g.user['uid']}"
+    cache_key = answer_cache_key(user_id, session_id, message)
+    if is_cacheable_message(message):
+        cached = cached_answer(cache_key)
+        if cached:
+            return jsonify({**cached, "cached": True})
+
     try:
         response = requests.post(
             f"{agent_url}/run",
             json={
                 "appName": app_name,
-                "userId": f"firebase-{g.user['uid']}",
+                "userId": user_id,
                 "sessionId": session_id,
                 "newMessage": {"role": "user", "parts": [{"text": message}]},
             },
@@ -180,7 +269,10 @@ def chat():
         ),
         "I could not produce a response.",
     )
-    return jsonify({"answer": final_text, "execution": execution_trace(events)})
+    execution = execution_trace(events)
+    if is_cacheable_message(message):
+        store_cached_answer(cache_key, final_text, execution)
+    return jsonify({"answer": final_text, "execution": execution, "cached": False})
 
 
 @app.post("/api/admin/users/<user_id>/role")

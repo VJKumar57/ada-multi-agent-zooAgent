@@ -3,3 +3,4 @@ gunicorn
 google-auth
 firebase-admin
 requests
+redis
