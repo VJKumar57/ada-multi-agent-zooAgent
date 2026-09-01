@@ -1,0 +1,6 @@
+-r requirements.txt
+-r zoo_chat_ui/requirements.txt
+-r zoo_mcp_server/requirements.txt
+-r zoo_knowledge_mcp_server/requirements.txt
+pytest
+ruff

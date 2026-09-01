@@ -15,6 +15,9 @@ def agent_module(monkeypatch):
     monkeypatch.setenv(
         "TRAVEL_MCP_SERVER_URL", "https://zoo-travel-mcp.example.com/mcp"
     )
+    monkeypatch.setenv(
+        "KNOWLEDGE_MCP_SERVER_URL", "https://zoo-knowledge-mcp.example.com/mcp"
+    )
     monkeypatch.setenv("MCP_SERVER_AUTHENTICATED", "FALSE")
     monkeypatch.setattr(
         google.cloud.logging,

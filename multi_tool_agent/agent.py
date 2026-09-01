@@ -23,6 +23,7 @@ google.cloud.logging.Client().setup_logging()
 model_name = os.environ["MODEL"]
 mcp_server_url = os.environ["MCP_SERVER_URL"]
 travel_mcp_server_url = os.environ["TRAVEL_MCP_SERVER_URL"]
+knowledge_mcp_server_url = os.environ["KNOWLEDGE_MCP_SERVER_URL"]
 mcp_server_authenticated = os.getenv("MCP_SERVER_AUTHENTICATED", "FALSE").upper() == "TRUE"
 
 
@@ -270,6 +271,16 @@ if mcp_server_authenticated:
     )
 
 travel_mcp_tools = MCPToolset(connection_params=travel_mcp_connection_params)
+knowledge_mcp_connection_params = StreamableHTTPConnectionParams(
+    url=knowledge_mcp_server_url
+)
+if mcp_server_authenticated:
+    knowledge_mcp_connection_params = StreamableHTTPConnectionParams(
+        url=knowledge_mcp_server_url,
+        headers={"Authorization": f"Bearer {get_id_token(knowledge_mcp_server_url)}"},
+    )
+
+knowledge_mcp_tools = MCPToolset(connection_params=knowledge_mcp_connection_params)
 wikipedia_tool = LangchainTool(
     tool=WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper())
 )
@@ -281,12 +292,13 @@ comprehensive_researcher = Agent(
     instruction="""You are a helpful research assistant. Fully answer the user's latest message.
 
 You can retrieve data about animals at our zoo, including names, ages, and
-locations, and search Wikipedia for general knowledge, including facts,
-lifespan, diet, and habitat.
+locations. You can also retrieve approved Zoo knowledge with source attribution
+and search Wikipedia for general knowledge when the approved knowledge is absent.
 
 Analyze the user's latest message first. Use one tool when one source is enough. When the
-request needs both internal zoo data and general knowledge, use both tools.
-Synthesize the findings into preliminary research data.
+request needs both internal zoo data and general knowledge, first use the
+approved Zoo knowledge tool and then use Wikipedia only when it does not answer
+the question. Synthesize the findings into preliminary research data.
 
 For every question that mentions "our zoo", "the zoo", or Zoo Animal Directory,
 your first action MUST be the MCP tool find_animals. Use the animal species from
@@ -294,9 +306,13 @@ the PROMPT as its query, using the singular form when needed, such as "elephant"
 for "elephants". Do not answer until find_animals returns. Do not say that
 zoo-specific information is unavailable unless find_animals returns no matching
 data. If the question asks about general facts, diet, habitat, or lifespan, call
-the wikipedia tool after find_animals and combine both results.
+search_curated_knowledge after find_animals. Use zoo_id "global" unless a Zoo
+location has already been established by a trusted tool response. Cite its source
+title, version, and updated date in your response. Call Wikipedia only when the
+curated result is empty or missing the requested information, and label it as
+external general research rather than a Zoo source.
 """,
-    tools=[mcp_tools, wikipedia_tool],
+    tools=[mcp_tools, knowledge_mcp_tools, wikipedia_tool],
     output_key="RESEARCH_DATA",
 )
 

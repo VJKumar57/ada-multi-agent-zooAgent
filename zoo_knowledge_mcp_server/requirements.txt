@@ -1,0 +1,4 @@
+mcp>=1.24,<2
+rank-bm25
+google-genai
+psycopg[binary]

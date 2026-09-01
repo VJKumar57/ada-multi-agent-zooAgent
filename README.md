@@ -10,6 +10,7 @@ A multi-agent Zoo Tour Guide deployed on Google Cloud Run. It answers questions 
 | ADK agent API | Configured deployment region | Obtain with `gcloud run services describe` | Agent runtime and REST API |
 | Zoo MCP server | Configured deployment region | Obtain with `gcloud run services describe` | Internal zoo data tools |
 | Zoo Travel MCP server | Configured deployment region | Obtain with `gcloud run services describe` | Internal location, weather, forecast, and route tools |
+| Zoo Knowledge MCP server | Configured deployment region | Obtain with `gcloud run services describe` | Internal curated Zoo knowledge retrieval |
 
 ## Architecture
 
@@ -23,6 +24,7 @@ flowchart LR
     Greeter --> Meals[Meal planner agent]
     Greeter --> Travel[Travel planner agent]
     Research --> MCP[Zoo MCP server<br/>Streamable HTTP]
+    Research --> Knowledge[Zoo Knowledge MCP server<br/>Streamable HTTP]
     Travel --> TravelMCP[Zoo Travel MCP server<br/>Streamable HTTP]
     Research --> Wiki[Wikipedia]
     Research --> Format[Response formatter]
@@ -68,7 +70,7 @@ The root `greeter` agent routes animal research, Zoo admission, and Zoo Cafe mea
 
 `tour_guide_workflow` is a `SequentialAgent` containing:
 
-1. `comprehensive_researcher`: retrieves animals, ages, and exhibit locations from the Zoo MCP server. For questions asking about habitat, diet, lifespan, or general facts, it also queries Wikipedia. Zoo questions are instructed to call `find_animals` first.
+1. `comprehensive_researcher`: retrieves animals, ages, and exhibit locations from the Zoo MCP server. For questions asking about habitat, diet, lifespan, or general facts, it retrieves approved Zoo knowledge with source attribution before using Wikipedia as a fallback. Zoo questions are instructed to call `find_animals` first.
 2. `response_formatter`: converts the collected data into a friendly visitor response, presenting zoo-specific details first.
 
 Sibling specialists of `tour_guide_workflow` are:
@@ -88,6 +90,7 @@ Zoo Cafe prices, calorie counts, and food-credit rules are sample data for this 
 | Internal data connection | Model Context Protocol (MCP), Streamable HTTP |
 | MCP client | `MCPToolset` and `StreamableHTTPConnectionParams` |
 | Zoo tools | `find_animals(query)`, `list_animals()` |
+| Curated knowledge tools | `search_curated_knowledge(query, zoo_id, max_results)` |
 | Zoo travel tools | `get_server_date()`, `list_zoo_locations()`, `get_zoo_location(zoo_id)`, `get_zoo_weather(zoo_id)`, `get_weather_forecast(zoo_id, visit_date, days)`, `get_route_to_zoo(origin, zoo_id)` |
 | General knowledge tool | LangChain `WikipediaQueryRun` |
 | Chat UI | Flask, vanilla HTML/CSS/JavaScript |
@@ -108,6 +111,11 @@ The sample Zoo Animal Directory contains Asha (Asian elephant), Milo (African el
 │   ├── requirements.txt
 │   └── Procfile
 ├── zoo_travel_mcp_server/  # Zoo travel conditions MCP service
+│   ├── server.py
+│   ├── requirements.txt
+│   └── Procfile
+├── zoo_knowledge_mcp_server/ # Curated Zoo knowledge MCP service
+│   ├── documents/
 │   ├── server.py
 │   ├── requirements.txt
 │   └── Procfile
@@ -165,6 +173,7 @@ GOOGLE_CLOUD_LOCATION=us-central1
 MODEL=gemini-2.5-flash
 MCP_SERVER_URL=https://zoo-mcp-server-PROJECT_NUMBER.us-west1.run.app/mcp
 TRAVEL_MCP_SERVER_URL=https://zoo-travel-mcp-server-PROJECT_NUMBER.us-west1.run.app/mcp
+KNOWLEDGE_MCP_SERVER_URL=https://zoo-knowledge-mcp-server-PROJECT_NUMBER.us-west1.run.app/mcp
 MCP_SERVER_AUTHENTICATED=FALSE
 UPSTREAM_TIMEOUT_SECONDS=10
 NOMINATIM_USER_AGENT=zoo-tour-guide-demo/1.0 (contact: YOUR_CONTACT_EMAIL)
@@ -176,6 +185,35 @@ TRAVEL_CACHE_MAX_ENTRIES=200
 Use `MCP_SERVER_AUTHENTICATED=TRUE` for a protected Cloud Run MCP service; the agent obtains and sends a Google identity token. The browser UI also obtains an identity token before calling the private ADK agent API.
 
 The travel MCP server uses Open-Meteo for weather and forecasts, Nominatim for origin geocoding, and OSRM for traffic-free driving distance and duration estimates. These public services require no API key, but Nominatim requests must identify the deployment with `NOMINATIM_USER_AGENT` and must be kept within its usage policy. The default Chicago, San Diego, Bronx, and Washington, DC locations are demonstration data. Replace them with approved locations by setting `ZOO_LOCATIONS_JSON` to a JSON array whose entries provide `id`, `name`, `address`, `latitude`, and `longitude`.
+
+### Hybrid Curated RAG Configuration
+
+The Knowledge MCP service supports an offline BM25 mode by default. Set
+`KNOWLEDGE_DATABASE_URL` to enable production hybrid retrieval: PostgreSQL full-text
+search plus `pgvector` semantic search, fused with reciprocal rank fusion. The
+database must support the `vector` extension and be privately reachable from the
+Knowledge MCP Cloud Run service. Store the connection URL in Secret Manager and use
+a VPC connector or direct VPC egress appropriate to the Cloud SQL network setup.
+
+The service uses Vertex AI `text-embedding-005` with 768 dimensions by default.
+Set `VERTEX_EMBEDDING_MODEL` only when the selected model supports that output
+dimension. Set `GEMINI_RERANKER_ENABLED=TRUE` to use Gemini to reorder the already
+retrieved approved chunks. It is `FALSE` by default; in either setting, the local
+lexical reranker is available and a Gemini error preserves hybrid retrieval order.
+
+Approved Markdown documents require `id`, `title`, `source`, `updated_at`,
+`version`, `approval_status: approved`, and `zoo_id`. Use `zoo_id: global` for
+guidance shared by all locations. Run ingestion as a controlled job after an
+approved document update:
+
+```bash
+python -m zoo_knowledge_mcp_server.ingest
+```
+
+The command creates the storage schema and skips unchanged document versions before
+requesting Vertex embeddings. Curated responses retain document title, source,
+version, update date, and Zoo scope. When curated retrieval is empty or insufficient,
+the agent may use Wikipedia and must present it as external general research.
 
 Cloud Run does not upload nested `.env` files by default. Pass these values with `--set-env-vars` during deployment.
 
@@ -247,6 +285,7 @@ AGENT_REGION="us-central1"
 MCP_REGION="us-west1"
 MCP_URL="https://zoo-mcp-server-${PROJECT_NUMBER}.${MCP_REGION}.run.app/mcp"
 TRAVEL_MCP_URL="https://zoo-travel-mcp-server-${PROJECT_NUMBER}.${MCP_REGION}.run.app/mcp"
+KNOWLEDGE_MCP_URL="https://zoo-knowledge-mcp-server-${PROJECT_NUMBER}.${MCP_REGION}.run.app/mcp"
 ```
 
 ### 1. Deploy the Zoo MCP Server
@@ -274,7 +313,32 @@ gcloud run deploy zoo-travel-mcp-server \
   --set-env-vars "UPSTREAM_TIMEOUT_SECONDS=10,NOMINATIM_USER_AGENT=zoo-tour-guide-demo/1.0 (contact: YOUR_CONTACT_EMAIL)"
 ```
 
-### 3. Deploy the ADK Agent API
+### 3. Deploy the Zoo Knowledge MCP Server
+
+```bash
+gcloud run deploy zoo-knowledge-mcp-server \
+  --source zoo_knowledge_mcp_server \
+  --project "$PROJECT_ID" \
+  --region "$MCP_REGION" \
+  --max-instances 2 \
+  --concurrency 10 \
+  --timeout 120 \
+  --set-env-vars "GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=${AGENT_REGION},GEMINI_RERANKER_ENABLED=FALSE"
+```
+
+The service indexes the approved Markdown files in
+`zoo_knowledge_mcp_server/documents/` at startup. Each document must include
+`id`, `title`, `source`, `updated_at`, `version`, `approval_status`, and `zoo_id`
+metadata before its content. Run `python -m zoo_knowledge_mcp_server.ingest` as a
+Cloud Run Job or an authenticated maintenance task after approved content changes;
+do not ingest documents as part of visitor requests.
+
+This initial deployment runs in local BM25 mode. After provisioning private Cloud
+SQL with `pgvector` and storing its URL in Secret Manager, enable hybrid retrieval
+by adding `--set-secrets "KNOWLEDGE_DATABASE_URL=knowledge-database-url:latest"`
+to a subsequent service deployment and running the ingestion command.
+
+### 4. Deploy the ADK Agent API
 
 ```bash
 gcloud run deploy weather-agent \
@@ -284,7 +348,7 @@ gcloud run deploy weather-agent \
   --max-instances 2 \
   --concurrency 10 \
   --timeout 120 \
-  --set-env-vars "GOOGLE_GENAI_USE_VERTEXAI=TRUE,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=${AGENT_REGION},MODEL=gemini-2.5-flash,MCP_SERVER_URL=${MCP_URL},TRAVEL_MCP_SERVER_URL=${TRAVEL_MCP_URL},MCP_SERVER_AUTHENTICATED=TRUE"
+  --set-env-vars "GOOGLE_GENAI_USE_VERTEXAI=TRUE,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=${AGENT_REGION},MODEL=gemini-2.5-flash,MCP_SERVER_URL=${MCP_URL},TRAVEL_MCP_SERVER_URL=${TRAVEL_MCP_URL},KNOWLEDGE_MCP_SERVER_URL=${KNOWLEDGE_MCP_URL},MCP_SERVER_AUTHENTICATED=TRUE"
 ```
 
 Capture its URL:
@@ -293,7 +357,7 @@ Capture its URL:
 AGENT_URL="$(gcloud run services describe weather-agent --project "$PROJECT_ID" --region "$AGENT_REGION" --format='value(status.url)')"
 ```
 
-### 4. Deploy the Browser Chat UI
+### 5. Deploy the Browser Chat UI
 
 ```bash
 gcloud run deploy zoo-tour-guide-ui \
@@ -401,7 +465,7 @@ curl -sS -X POST "$MCP_URL" \
 
 ## Security Notes
 
-The ADK agent API and both MCP services require Cloud Run IAM authentication. The UI runtime service account needs `roles/run.invoker` on the agent API, and the agent runtime service account needs `roles/run.invoker` on both MCP services. The browser UI is public only so Firebase can present the sign-in experience; Flask rejects unauthenticated API requests after Firebase token verification.
+The ADK agent API and all three MCP services require Cloud Run IAM authentication. The UI runtime service account needs `roles/run.invoker` on the agent API, and the agent runtime service account needs `roles/run.invoker` on the Zoo Directory, Travel, and Knowledge MCP services. The browser UI is public only so Firebase can present the sign-in experience; Flask rejects unauthenticated API requests after Firebase token verification.
 
 For a publicly shared deployment, use Identity-Aware Proxy or an application authentication layer, persistent distributed rate limiting, and a dedicated service account for each service. The included UI applies a per-instance request limit, a 4 KB request-body limit, a 1,000-character message limit, and upstream timeouts; it is a baseline, not a substitute for edge rate limiting.
 
